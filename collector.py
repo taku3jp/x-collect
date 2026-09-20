@@ -27,11 +27,14 @@ JST = timezone(timedelta(hours=9))
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 TOKEN = os.environ.get("APPS_SCRIPT_TOKEN", "")
 STATE_PATH = os.environ.get("X_STATE_PATH", "state.json")
-MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "15"))
+MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "50"))
 MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "25"))
 SCROLL_PAUSE = 2.0
 DETAIL_PAUSE = 3.0
 NAV_TIMEOUT = 60_000
+
+# X内部APIのオペレーション名（URLに含まれる文字列で判定）
+TIMELINE_OPS = ("HomeTimeline", "UserTweets", "UserMedia")
 
 STATUS_RE = re.compile(r"/status/(\d+)")
 
@@ -109,7 +112,8 @@ def parse_tweet(tr, fallback_user=""):
     return {
         "id": tr.get("rest_id") or "",
         "user": screen_name,
-        "url": f"https://x.com/{screen_name}/status/{tr.get('rest_id')}",
+        "url": (f"https://x.com/{screen_name}/status/{tr.get('rest_id')}"
+                if screen_name else f"https://x.com/i/web/status/{tr.get('rest_id')}"),
         "text": legacy.get("full_text") or "",
         "date": date_str,
         "sort_key": sort_key,
@@ -122,21 +126,29 @@ def parse_tweet(tr, fallback_user=""):
     }
 
 
-def scrape_account(page, account, captured):
-    """Open the profile timeline and collect tweet results from GraphQL."""
+def scrape_timeline(page, url, captured, for_you=False):
+    """Open a timeline URL and collect tweet results from GraphQL responses."""
     def on_response(res):
-        if "UserTweets" in res.url or "UserMedia" in res.url:
+        if any(op in res.url for op in TIMELINE_OPS):
             try:
                 captured.append(res.json())
             except Exception:
                 pass
 
     page.on("response", on_response)
-    page.goto(f"https://x.com/{account}", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+    page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_timeout(4000)
 
-    if "/i/flow/login" in page.url or "login" in page.url.split("/")[3:4]:
+    if "/i/flow/login" in page.url:
         raise RuntimeError("Xのログイン画面にリダイレクトされました。state.jsonが無効です。")
+
+    if for_you:
+        # 「For you / おすすめ」タブを明示的に選択
+        try:
+            page.get_by_role("tab", name=re.compile("For you|おすすめ")).first.click(timeout=8000)
+            page.wait_for_timeout(3000)
+        except Exception:
+            pass
 
     last_height = 0
     for i in range(MAX_SCROLLS):
@@ -205,8 +217,7 @@ def main():
     print(f"対象: {accounts} / 閾値: {threshold} / 収集済み: {len(existing)}件")
 
     if not accounts:
-        print("対象アカウントが未設定です。終了します。")
-        return
+        print("対象アカウント未指定 → おすすめTLのみ収集します")
 
     tweets = {}
     with sync_playwright() as p:
@@ -220,10 +231,19 @@ def main():
         page = ctx.new_page()
 
         captured = []
+        # おすすめTL（For You）は常に収集
+        print("[timeline] For You")
+        try:
+            scrape_timeline(page, "https://x.com/home", captured, for_you=True)
+        except Exception as e:
+            print(f"  error: {e}", file=sys.stderr)
+        page.wait_for_timeout(2000)
+
+        # 設定タブにアカウント指定があればプロフィールも巡回
         for account in accounts:
             print(f"[timeline] @{account}")
             try:
-                scrape_account(page, account, captured)
+                scrape_timeline(page, f"https://x.com/{account}", captured)
             except Exception as e:
                 print(f"  error: {e}", file=sys.stderr)
             page.wait_for_timeout(2000)

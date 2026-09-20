@@ -36,6 +36,6 @@ jobs:
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
-          MAX_SCROLLS: "15"
+          MAX_SCROLLS: "50"
           MAX_SHOTS: "25"
         run: python collector.py

@@ -78,6 +78,23 @@ function doGet(e) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const cfg = ss.getSheetByName(CONFIG_SHEET);
+
+    // 設定更新: ?action=setconfig&accounts=a,b,c&threshold=300000&enabled=ON
+    if (action === "setconfig") {
+      const p = e.parameter || {};
+      if (p.threshold !== undefined && p.threshold !== "")
+        cfg.getRange("B2").setValue(Number(p.threshold));
+      if (p.enabled !== undefined && p.enabled !== "")
+        cfg.getRange("B1").setValue(String(p.enabled).toUpperCase() === "OFF" ? "OFF" : "ON");
+      if (p.accounts !== undefined) {
+        const last = Math.max(cfg.getLastRow(), 5);
+        cfg.getRange(5, 1, last - 4, 1).clearContent();
+        const list = String(p.accounts).split(",").map(s => s.trim().replace(/^@/, "")).filter(Boolean);
+        list.forEach((a, i) => cfg.getRange(5 + i, 1).setValue(a));
+      }
+      return ok({ saved: true });
+    }
+
     const enabled = String(cfg.getRange("B1").getValue()).toUpperCase() !== "OFF";
     const threshold = Number(cfg.getRange("B2").getValue()) || 300000;
     const lastCfg = cfg.getLastRow();

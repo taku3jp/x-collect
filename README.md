@@ -9,8 +9,9 @@ Googleスプレッドシートに自動収集する。GitHub Actionsで3時間�
 GitHub Actions (3時間おき / 無料)
   └─ collector.py
        1. Apps Script から設定をGET（対象アカウント・閾値・収集済みID）
-       2. state.json のXセッションで各アカウントのタイムラインを巡回
-          ※数値はDOMではなくX内部API(UserTweets/TweetDetail)のJSONから取得
+       2. state.json のXセッションで「おすすめTL(For You)」を限界まで巡回
+          ※設定タブにアカウントを入れるとそのプロフィールTLも追加で巡回
+          ※数値はDOMではなくX内部API(HomeTimeline/UserTweets/TweetDetail)のJSONから取得
        3. 閾値以上&未収集のポストの詳細ページを開いてスクリーンショット
        4. Apps Script にPOST → シート先頭に行挿入 + 画像をセルに埋め込み
 ```
