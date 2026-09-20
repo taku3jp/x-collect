@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 *.png
 .DS_Store
+node_modules/
+gas/.clasp.json
