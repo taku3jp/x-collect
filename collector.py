@@ -110,6 +110,16 @@ def parse_tweet(tr, fallback_user=""):
                 for u in (legacy.get("entities") or {}).get("urls", [])]
     card = json.dumps(tr.get("card") or {})
     haystack = (legacy.get("full_text") or "") + " " + " ".join(ext_urls) + " " + card
+
+    # X公式のセンシティブ判定（メディア・ポスト・投稿者のいずれか）
+    media_list = (legacy.get("extended_entities") or {}).get("media") or \
+        (legacy.get("entities") or {}).get("media") or []
+    sensitive = bool(
+        legacy.get("possibly_sensitive") or
+        legacy.get("possibly_sensitive_editable") or
+        (user_results.get("legacy") or {}).get("possibly_sensitive") or
+        any(m.get("possibly_sensitive") for m in media_list)
+    )
     haystack = haystack.lower()
 
     created = legacy.get("created_at") or ""
@@ -135,6 +145,7 @@ def parse_tweet(tr, fallback_user=""):
         "replies": int(legacy.get("reply_count") or 0),
         "bookmarks": int(legacy.get("bookmark_count") or 0),
         "haystack": haystack,
+        "sensitive": sensitive,
     }
 
 
@@ -201,7 +212,8 @@ def get_tweet_detail(page, tweet):
                 fresh = parse_tweet(tr, tweet["user"])
                 tweet.update({k: fresh[k] for k in
                               ("impressions", "likes", "reposts", "replies",
-                               "bookmarks", "text", "media", "date", "haystack")})
+                               "bookmarks", "text", "media", "date", "haystack",
+                               "sensitive")})
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
@@ -239,11 +251,19 @@ def main():
     threshold = int(config.get("threshold") or 300000)
     accounts = config.get("accounts") or []
     keywords = [str(k).lower() for k in (config.get("keywords") or [])]
+    sensitive_only = bool(config.get("sensitiveOnly", True))
     existing = set(config.get("existingIds") or [])
-    print(f"対象: {accounts} / 閾値: {threshold} / キーワード: {len(keywords)}件 / 収集済み: {len(existing)}件")
+    print(f"対象: {accounts} / 閾値: {threshold} / キーワード: {len(keywords)}件"
+          f" / センシティブのみ: {sensitive_only} / 収集済み: {len(existing)}件")
 
     def kw_match(t):
-        return not keywords or any(k in t["haystack"] for k in keywords)
+        return any(k in t["haystack"] for k in keywords)
+
+    def is_target(t):
+        # センシティブONの場合: 公式sensitiveフラグ or キーワード一致
+        if sensitive_only:
+            return t["sensitive"] or kw_match(t)
+        return not keywords or kw_match(t)
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
@@ -299,7 +319,7 @@ def main():
 
         candidates = [t for t in tweets.values()
                       if t["impressions"] >= threshold and t["id"] not in existing
-                      and kw_match(t)]
+                      and is_target(t)]
         candidates.sort(key=lambda t: t["sort_key"])  # 古い順→POSTで新しいのが上に来る
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未収集: {len(candidates)}件")
 
@@ -314,8 +334,8 @@ def main():
             if t["impressions"] < threshold:
                 print(f"  skip (詳細で閾値未満): {t['url']}")
                 continue
-            if not kw_match(t):
-                print(f"  skip (キーワード不一致): {t['url']}")
+            if not is_target(t):
+                print(f"  skip (対象外): {t['url']}")
                 continue
 
             row = {

@@ -28,7 +28,10 @@ function ensureSheets_() {
     cfg.getRange("B1").setValue("ON");
     cfg.getRange("A2").setValue("インプ閾値");
     cfg.getRange("B2").setValue(300000);
+    cfg.getRange("A3").setValue("センシティブ含むもののみ");
+    cfg.getRange("B3").setValue("ON");
     cfg.getRange("A4").setValue("対象アカウント（@なし・1行1件）");
+    cfg.getRange("D4").setValue("対象キーワード/ドメイン（1行1件・空なら無フィルタ）");
   }
 
   let data = ss.getSheetByName(DATA_SHEET);
@@ -78,12 +81,42 @@ function doGet(e) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const cfg = ss.getSheetByName(CONFIG_SHEET);
+
+    // 設定更新: ?action=setconfig&accounts=a,b,c&threshold=300000&enabled=ON
+    if (action === "setconfig") {
+      const p = e.parameter || {};
+      if (p.threshold !== undefined && p.threshold !== "")
+        cfg.getRange("B2").setValue(Number(p.threshold));
+      if (p.enabled !== undefined && p.enabled !== "")
+        cfg.getRange("B1").setValue(String(p.enabled).toUpperCase() === "OFF" ? "OFF" : "ON");
+      if (p.sensitiveOnly !== undefined && p.sensitiveOnly !== "")
+        cfg.getRange("B3").setValue(String(p.sensitiveOnly).toUpperCase() === "OFF" ? "OFF" : "ON");
+      if (p.accounts !== undefined) {
+        const last = Math.max(cfg.getLastRow(), 5);
+        cfg.getRange(5, 1, last - 4, 1).clearContent();
+        const list = String(p.accounts).split(",").map(s => s.trim().replace(/^@/, "")).filter(Boolean);
+        list.forEach((a, i) => cfg.getRange(5 + i, 1).setValue(a));
+      }
+      if (p.keywords !== undefined) {
+        const last = Math.max(cfg.getLastRow(), 5);
+        cfg.getRange(5, 4, last - 4, 1).clearContent();
+        const list = String(p.keywords).split(",").map(s => s.trim()).filter(Boolean);
+        list.forEach((k, i) => cfg.getRange(5 + i, 4).setValue(k));
+      }
+      return ok({ saved: true });
+    }
+
     const enabled = String(cfg.getRange("B1").getValue()).toUpperCase() !== "OFF";
     const threshold = Number(cfg.getRange("B2").getValue()) || 300000;
+    const sensitiveOnly = String(cfg.getRange("B3").getValue()).toUpperCase() !== "OFF";
     const lastCfg = cfg.getLastRow();
     const accounts = lastCfg >= 5
       ? cfg.getRange(5, 1, lastCfg - 4, 1).getValues()
         .flat().map(String).map(s => s.trim().replace(/^@/, "")).filter(Boolean)
+      : [];
+    const keywords = lastCfg >= 5
+      ? cfg.getRange(5, 4, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim()).filter(Boolean)
       : [];
 
     const sheet = ss.getSheetByName(DATA_SHEET);
@@ -96,7 +129,7 @@ function doGet(e) {
         if (m) existingIds.push(m[1]);
       }
     }
-    return ok({ enabled, threshold, accounts, existingIds });
+    return ok({ enabled, threshold, sensitiveOnly, accounts, keywords, existingIds });
   } catch (err) {
     return ok({ error: String(err) });
   }
