@@ -350,8 +350,11 @@ def main():
 
             try:
                 res = call_api(payload=payload)
-                print(f"  saved No.{res.get('no')} {t['url']} (imp {t['impressions']:,})")
-                sent += 1
+                if res.get("saved"):
+                    print(f"  saved No.{res.get('no')} {t['url']} (imp {t['impressions']:,})")
+                    sent += 1
+                else:
+                    print(f"  save failed {t['id']}: {res.get('error')}", file=sys.stderr)
             except Exception as e:
                 print(f"  post error {t['id']}: {e}", file=sys.stderr)
 
