@@ -39,3 +39,11 @@ jobs:
           MAX_SCROLLS: "50"
           MAX_SHOTS: "25"
         run: python collector.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug
+          path: debug_*.png
+          if-no-files-found: ignore
+          retention-days: 7

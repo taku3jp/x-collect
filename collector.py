@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -67,6 +68,9 @@ def call_api(payload=None, params=""):
         except urllib.error.HTTPError as e:
             if e.code in (301, 302, 303, 307) and e.headers.get("Location"):
                 url = e.headers["Location"]
+                # Apps ScriptのPOSTは処理後に302を返す。リダイレクト先は
+                # 結果を取りに行くだけなのでGETに切り替える
+                data = None
                 continue
             raise
     raise RuntimeError("Apps Script redirect limit exceeded")
@@ -139,7 +143,9 @@ def scrape_timeline(page, url, captured, for_you=False):
     page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_timeout(4000)
 
+    print(f"  url={page.url} title={page.title()!r}")
     if "/i/flow/login" in page.url:
+        page.screenshot(path="debug_login.png")
         raise RuntimeError("Xのログイン画面にリダイレクトされました。state.jsonが無効です。")
 
     if for_you:
@@ -160,6 +166,7 @@ def scrape_timeline(page, url, captured, for_you=False):
         last_height = height
 
     page.remove_listener("response", on_response)
+    print(f"  scrolls={i+1} captured_responses={len(captured)}")
 
 
 def get_tweet_detail(page, tweet):
@@ -255,6 +262,11 @@ def main():
                 t = parse_tweet(tr)
                 if t["id"] and t["id"] not in tweets:
                     tweets[t["id"]] = t
+
+        if not tweets:
+            page.screenshot(path="debug_empty.png")
+            Path("debug_empty.html").write_text(page.content())
+            print("  0件 → debug_empty.png/html を保存")
 
         candidates = [t for t in tweets.values()
                       if t["impressions"] >= threshold and t["id"] not in existing]
