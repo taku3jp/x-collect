@@ -194,7 +194,7 @@ def scrape_timeline(page, url, captured, for_you=False):
 
 def get_tweet_detail(page, tweet, keywords):
     """Open the tweet permalink; capture TweetDetail JSON and screenshot.
-    Also checks the author's own replies for affiliate links."""
+    Also checks the reply section for affiliate links."""
     captured = []
 
     def on_response(res):
@@ -221,16 +221,11 @@ def get_tweet_detail(page, tweet, keywords):
                            "bookmarks", "text", "media", "date", "haystack",
                            "sensitive", "lang")})
 
-    # 投稿者自身の返信にアフィリエイトリンクがあるかチェック
+    # 返信欄（投稿者以外含む）にアフィリエイトリンクがあるかチェック
     tweet["reply_link"] = False
     for tr in all_results:
         lg = tr.get("legacy") or {}
         if lg.get("in_reply_to_status_id_str") != tweet["id"]:
-            continue
-        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
-        author_name = (author.get("legacy") or {}).get("screen_name") or \
-            (author.get("core") or {}).get("screen_name")
-        if author_name != tweet["user"]:
             continue
         urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (lg.get("entities") or {}).get("urls", [])]
@@ -293,7 +288,7 @@ def main():
         if kw_match(t):
             return True
         if sensitive_only and t["sensitive"]:
-            # 厳格モード: 投稿者自身の返信にアフィリエイトリンク必須
+            # 厳格モード: 返信欄にアフィリエイトリンク必須
             # （TL収集段階では返信未確認なので緩く通し、詳細取得後に厳格判定）
             return (not strict) or bool(t.get("reply_link"))
         return not sensitive_only
