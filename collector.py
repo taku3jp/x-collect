@@ -228,7 +228,9 @@ def get_tweet_detail(page, tweet, keywords):
         if lg.get("in_reply_to_status_id_str") != tweet["id"]:
             continue
         author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
-        if (author.get("legacy") or {}).get("screen_name") != tweet["user"]:
+        author_name = (author.get("legacy") or {}).get("screen_name") or \
+            (author.get("core") or {}).get("screen_name")
+        if author_name != tweet["user"]:
             continue
         urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (lg.get("entities") or {}).get("urls", [])]
