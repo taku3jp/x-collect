@@ -54,11 +54,17 @@ publicにするとGitHub Actionsの実行時間が**無制限**になります�
 
 ### 4. state.json（Xログインセッション）を作る
 
-このMacで一度だけ実行:
+**方法A（推奨）: ログイン済みChromeからクッキーを取り出す**
 
 ```bash
-pip install playwright
-playwright install chromium
+pip install browser_cookie3 playwright
+python export_state_from_chrome.py
+# macOSのキーチェーン許可ダイアログが出たら「許可」
+```
+
+**方法B: Playwrightブラウザでログイン**（Xのログイン制限に注意）
+
+```bash
 python export_state.py
 # ブラウザが開く → Xにログイン → ターミナルでEnter → state.jsonが生成
 ```
