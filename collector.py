@@ -105,6 +105,13 @@ def parse_tweet(tr, fallback_user=""):
             if variants:
                 media_urls.append(max(variants, key=lambda v: v.get("bitrate", 0))["url"])
 
+    # キーワード判定用: 本文+展開済みURL+カードURLをまとめた文字列
+    ext_urls = [u.get("expanded_url") or u.get("url") or ""
+                for u in (legacy.get("entities") or {}).get("urls", [])]
+    card = json.dumps(tr.get("card") or {})
+    haystack = (legacy.get("full_text") or "") + " " + " ".join(ext_urls) + " " + card
+    haystack = haystack.lower()
+
     created = legacy.get("created_at") or ""
     try:
         dt = datetime.strptime(created, "%a %b %d %H:%M:%S %z %Y").astimezone(JST)
@@ -127,6 +134,7 @@ def parse_tweet(tr, fallback_user=""):
         "reposts": int(legacy.get("retweet_count") or 0),
         "replies": int(legacy.get("reply_count") or 0),
         "bookmarks": int(legacy.get("bookmark_count") or 0),
+        "haystack": haystack,
     }
 
 
@@ -193,13 +201,23 @@ def get_tweet_detail(page, tweet):
                 fresh = parse_tweet(tr, tweet["user"])
                 tweet.update({k: fresh[k] for k in
                               ("impressions", "likes", "reposts", "replies",
-                               "bookmarks", "text", "media", "date")})
+                               "bookmarks", "text", "media", "date", "haystack")})
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
     try:
+        # センシティブメディアの「表示」ボタンを自動クリック
+        for btn in page.get_by_role("button", name=re.compile("表示|View")).all():
+            try:
+                btn.click(timeout=800)
+            except Exception:
+                pass
         article.scroll_into_view_if_needed(timeout=10_000)
-        page.wait_for_timeout(500)
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
         shot = article.screenshot(timeout=15_000)
     except Exception as e:
         print(f"  screenshot failed for {tweet['id']}: {e}", file=sys.stderr)
@@ -220,19 +238,26 @@ def main():
 
     threshold = int(config.get("threshold") or 300000)
     accounts = config.get("accounts") or []
+    keywords = [str(k).lower() for k in (config.get("keywords") or [])]
     existing = set(config.get("existingIds") or [])
-    print(f"対象: {accounts} / 閾値: {threshold} / 収集済み: {len(existing)}件")
+    print(f"対象: {accounts} / 閾値: {threshold} / キーワード: {len(keywords)}件 / 収集済み: {len(existing)}件")
+
+    def kw_match(t):
+        return not keywords or any(k in t["haystack"] for k in keywords)
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
 
     tweets = {}
     headful = os.environ.get("HEADFUL") == "1"
+    launch_args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=not headful,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-        )
+        try:
+            # 本物のChromeを使う（コーデックあり→動画が再生/表示される）
+            browser = p.chromium.launch(channel="chrome", headless=not headful,
+                                        args=launch_args)
+        except Exception:
+            browser = p.chromium.launch(headless=not headful, args=launch_args)
         ctx = browser.new_context(
             storage_state=STATE_PATH,
             viewport={"width": 700, "height": 900},
@@ -273,7 +298,8 @@ def main():
             print("  0件 → debug_empty.png/html を保存")
 
         candidates = [t for t in tweets.values()
-                      if t["impressions"] >= threshold and t["id"] not in existing]
+                      if t["impressions"] >= threshold and t["id"] not in existing
+                      and kw_match(t)]
         candidates.sort(key=lambda t: t["sort_key"])  # 古い順→POSTで新しいのが上に来る
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未収集: {len(candidates)}件")
 
@@ -287,6 +313,9 @@ def main():
 
             if t["impressions"] < threshold:
                 print(f"  skip (詳細で閾値未満): {t['url']}")
+                continue
+            if not kw_match(t):
+                print(f"  skip (キーワード不一致): {t['url']}")
                 continue
 
             row = {

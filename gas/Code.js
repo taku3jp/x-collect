@@ -29,6 +29,7 @@ function ensureSheets_() {
     cfg.getRange("A2").setValue("インプ閾値");
     cfg.getRange("B2").setValue(300000);
     cfg.getRange("A4").setValue("対象アカウント（@なし・1行1件）");
+    cfg.getRange("D4").setValue("対象キーワード/ドメイン（1行1件・空なら無フィルタ）");
   }
 
   let data = ss.getSheetByName(DATA_SHEET);
@@ -92,6 +93,12 @@ function doGet(e) {
         const list = String(p.accounts).split(",").map(s => s.trim().replace(/^@/, "")).filter(Boolean);
         list.forEach((a, i) => cfg.getRange(5 + i, 1).setValue(a));
       }
+      if (p.keywords !== undefined) {
+        const last = Math.max(cfg.getLastRow(), 5);
+        cfg.getRange(5, 4, last - 4, 1).clearContent();
+        const list = String(p.keywords).split(",").map(s => s.trim()).filter(Boolean);
+        list.forEach((k, i) => cfg.getRange(5 + i, 4).setValue(k));
+      }
       return ok({ saved: true });
     }
 
@@ -101,6 +108,10 @@ function doGet(e) {
     const accounts = lastCfg >= 5
       ? cfg.getRange(5, 1, lastCfg - 4, 1).getValues()
         .flat().map(String).map(s => s.trim().replace(/^@/, "")).filter(Boolean)
+      : [];
+    const keywords = lastCfg >= 5
+      ? cfg.getRange(5, 4, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim()).filter(Boolean)
       : [];
 
     const sheet = ss.getSheetByName(DATA_SHEET);
@@ -113,7 +124,7 @@ function doGet(e) {
         if (m) existingIds.push(m[1]);
       }
     }
-    return ok({ enabled, threshold, accounts, existingIds });
+    return ok({ enabled, threshold, accounts, keywords, existingIds });
   } catch (err) {
     return ok({ error: String(err) });
   }
