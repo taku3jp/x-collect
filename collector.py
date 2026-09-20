@@ -81,7 +81,10 @@ def iter_tweet_results(obj, out):
     if isinstance(obj, dict):
         legacy = obj.get("legacy")
         if isinstance(legacy, dict) and legacy.get("full_text") and obj.get("rest_id"):
-            out.append(obj)
+            # リポストのラッパーは除外（元ポストは内部で別途拾われるので
+            # 参考リンクが常に元ポストのURLになる）
+            if "retweeted_status_result" not in legacy:
+                out.append(obj)
         for v in obj.values():
             iter_tweet_results(v, out)
     elif isinstance(obj, list):
@@ -146,6 +149,7 @@ def parse_tweet(tr, fallback_user=""):
         "bookmarks": int(legacy.get("bookmark_count") or 0),
         "haystack": haystack,
         "sensitive": sensitive,
+        "lang": legacy.get("lang") or "",
     }
 
 
@@ -213,7 +217,7 @@ def get_tweet_detail(page, tweet):
                 tweet.update({k: fresh[k] for k in
                               ("impressions", "likes", "reposts", "replies",
                                "bookmarks", "text", "media", "date", "haystack",
-                               "sensitive")})
+                               "sensitive", "lang")})
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
@@ -252,14 +256,18 @@ def main():
     accounts = config.get("accounts") or []
     keywords = [str(k).lower() for k in (config.get("keywords") or [])]
     sensitive_only = bool(config.get("sensitiveOnly", True))
+    ja_only = bool(config.get("jaOnly", True))
     existing = set(config.get("existingIds") or [])
     print(f"対象: {accounts} / 閾値: {threshold} / キーワード: {len(keywords)}件"
-          f" / センシティブのみ: {sensitive_only} / 収集済み: {len(existing)}件")
+          f" / センシティブのみ: {sensitive_only} / 日本語のみ: {ja_only}"
+          f" / 収集済み: {len(existing)}件")
 
     def kw_match(t):
         return any(k in t["haystack"] for k in keywords)
 
     def is_target(t):
+        if ja_only and t["lang"] != "ja":
+            return False
         # センシティブONの場合: 公式sensitiveフラグ or キーワード一致
         if sensitive_only:
             return t["sensitive"] or kw_match(t)
