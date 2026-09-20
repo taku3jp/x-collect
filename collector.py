@@ -192,8 +192,9 @@ def scrape_timeline(page, url, captured, for_you=False):
     print(f"  scrolls={i+1} captured_responses={len(captured)}")
 
 
-def get_tweet_detail(page, tweet):
-    """Open the tweet permalink; capture TweetDetail JSON and screenshot."""
+def get_tweet_detail(page, tweet, keywords):
+    """Open the tweet permalink; capture TweetDetail JSON and screenshot.
+    Also checks the author's own replies for affiliate links."""
     captured = []
 
     def on_response(res):
@@ -208,16 +209,34 @@ def get_tweet_detail(page, tweet):
     page.wait_for_timeout(4000)
     page.remove_listener("response", on_response)
 
+    all_results = []
     for body in captured:
-        results = []
-        iter_tweet_results(body, results)
-        for tr in results:
-            if tr.get("rest_id") == tweet["id"]:
-                fresh = parse_tweet(tr, tweet["user"])
-                tweet.update({k: fresh[k] for k in
-                              ("impressions", "likes", "reposts", "replies",
-                               "bookmarks", "text", "media", "date", "haystack",
-                               "sensitive", "lang")})
+        iter_tweet_results(body, all_results)
+
+    for tr in all_results:
+        if tr.get("rest_id") == tweet["id"]:
+            fresh = parse_tweet(tr, tweet["user"])
+            tweet.update({k: fresh[k] for k in
+                          ("impressions", "likes", "reposts", "replies",
+                           "bookmarks", "text", "media", "date", "haystack",
+                           "sensitive", "lang")})
+
+    # 投稿者自身の返信にアフィリエイトリンクがあるかチェック
+    tweet["reply_link"] = False
+    for tr in all_results:
+        lg = tr.get("legacy") or {}
+        if lg.get("in_reply_to_status_id_str") != tweet["id"]:
+            continue
+        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
+        if (author.get("legacy") or {}).get("screen_name") != tweet["user"]:
+            continue
+        urls = [u.get("expanded_url") or u.get("url") or ""
+                for u in (lg.get("entities") or {}).get("urls", [])]
+        rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
+        # 返信に外部URLがあり、キーワード指定があればその一致も必須
+        if urls and (not keywords or any(k in rh for k in keywords)):
+            tweet["reply_link"] = True
+            break
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
@@ -265,13 +284,17 @@ def main():
     def kw_match(t):
         return any(k in t["haystack"] for k in keywords)
 
-    def is_target(t):
+    def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
             return False
-        # センシティブONの場合: 公式sensitiveフラグ or キーワード一致
-        if sensitive_only:
-            return t["sensitive"] or kw_match(t)
-        return not keywords or kw_match(t)
+        # 本文/リンクのキーワード一致はそのままアダアフィ判定
+        if kw_match(t):
+            return True
+        if sensitive_only and t["sensitive"]:
+            # 厳格モード: 投稿者自身の返信にアフィリエイトリンク必須
+            # （TL収集段階では返信未確認なので緩く通し、詳細取得後に厳格判定）
+            return (not strict) or bool(t.get("reply_link"))
+        return not sensitive_only
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
@@ -327,14 +350,14 @@ def main():
 
         candidates = [t for t in tweets.values()
                       if t["impressions"] >= threshold and t["id"] not in existing
-                      and is_target(t)]
+                      and is_target(t, strict=False)]
         candidates.sort(key=lambda t: t["sort_key"])  # 古い順→POSTで新しいのが上に来る
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未収集: {len(candidates)}件")
 
         sent = 0
         for t in candidates[:MAX_SHOTS]:
             try:
-                shot = get_tweet_detail(page, t)
+                shot = get_tweet_detail(page, t, keywords)
             except Exception as e:
                 print(f"  detail error {t['id']}: {e}", file=sys.stderr)
                 shot = None
@@ -342,8 +365,8 @@ def main():
             if t["impressions"] < threshold:
                 print(f"  skip (詳細で閾値未満): {t['url']}")
                 continue
-            if not is_target(t):
-                print(f"  skip (対象外): {t['url']}")
+            if not is_target(t, strict=True):
+                print(f"  skip (アフィリンクなし等): {t['url']}")
                 continue
 
             row = {
