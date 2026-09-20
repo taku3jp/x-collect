@@ -227,8 +227,12 @@ def main():
         print("対象アカウント未指定 → おすすめTLのみ収集します")
 
     tweets = {}
+    headful = os.environ.get("HEADFUL") == "1"
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=not headful,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+        )
         ctx = browser.new_context(
             storage_state=STATE_PATH,
             viewport={"width": 700, "height": 900},
