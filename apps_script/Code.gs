@@ -8,13 +8,41 @@
  *   実行ユーザー: 自分 / アクセス: 全員
  */
 
-const TOKEN = "CHANGE_ME_TO_RANDOM_STRING"; // GitHub Secret APPS_SCRIPT_TOKEN と同じ値
+const TOKEN = PropertiesService.getScriptProperties().getProperty("TOKEN") || "";
 const DATA_SHEET = "X収集テスト";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
 const IMAGE_COL = 6;        // F列 = 動画内容
 const IMAGE_ROW_HEIGHT = 220;
 const MAX_EXISTING_SCAN = 3000;
+
+/**
+ * 初回セットアップ: この関数をエディタから1回だけ実行する。
+ * 「設定」タブの作成と「X収集テスト」タブのヘッダ行を自動で作る。
+ * （実行時に権限承認ダイアログが出る → デプロイ前の認可も兼ねる）
+ */
+function setup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  let cfg = ss.getSheetByName(CONFIG_SHEET);
+  if (!cfg) cfg = ss.insertSheet(CONFIG_SHEET);
+  cfg.getRange("A1").setValue("収集ON/OFF");
+  if (!cfg.getRange("B1").getValue()) cfg.getRange("B1").setValue("ON");
+  cfg.getRange("A2").setValue("インプ閾値");
+  if (!cfg.getRange("B2").getValue()) cfg.getRange("B2").setValue(300000);
+  cfg.getRange("A4").setValue("対象アカウント（@なし・1行1件）");
+
+  let data = ss.getSheetByName(DATA_SHEET);
+  if (!data) data = ss.insertSheet(DATA_SHEET, 0);
+  if (!data.getRange("A1").getValue()) {
+    data.getRange(1, 1, 1, 11).setValues([[
+      "No.", "日付", "参考リンク", "ポスト文", "素材リンク",
+      "動画内容", "参考画像", "インプ", "いいね", "リポスト", "保存数"
+    ]]);
+    data.setFrozenRows(1);
+  }
+  data.setColumnWidth(IMAGE_COL, 420);
+}
 
 function ok(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
