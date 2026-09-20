@@ -52,7 +52,7 @@ def call_api(payload=None, params=""):
     if payload is not None:
         data = json.dumps({**payload, "token": TOKEN}).encode()
     elif params:
-        url += ("&" if "?" in url else "?") + params
+        url += ("&" if "?" in url else "?") + f"token={TOKEN}&" + params
 
     for _ in range(5):
         req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
