@@ -11,7 +11,8 @@ const DATA_SHEET = "X収集テスト";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
 const IMAGE_COL = 6;        // F列 = 動画内容
-const IMAGE_ROW_HEIGHT = 220;
+const IMAGE_ROW_HEIGHT = 600;
+const IMAGE_COL_WIDTH = 560;
 const MAX_EXISTING_SCAN = 3000;
 
 function getToken_() {
@@ -30,6 +31,8 @@ function ensureSheets_() {
     cfg.getRange("B2").setValue(300000);
     cfg.getRange("A3").setValue("センシティブ含むもののみ");
     cfg.getRange("B3").setValue("ON");
+    cfg.getRange("C1").setValue("日本語のみ");
+    cfg.getRange("D1").setValue("ON");
     cfg.getRange("A4").setValue("対象アカウント（@なし・1行1件）");
     cfg.getRange("D4").setValue("対象キーワード/ドメイン（1行1件・空なら無フィルタ）");
   }
@@ -43,7 +46,8 @@ function ensureSheets_() {
     ]]);
     data.setFrozenRows(1);
   }
-  data.setColumnWidth(IMAGE_COL, 420);
+  data.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+  data.setColumnWidth(4, 300);  // D列 = ポスト文
 }
 
 function ok(obj) {
@@ -91,6 +95,8 @@ function doGet(e) {
         cfg.getRange("B1").setValue(String(p.enabled).toUpperCase() === "OFF" ? "OFF" : "ON");
       if (p.sensitiveOnly !== undefined && p.sensitiveOnly !== "")
         cfg.getRange("B3").setValue(String(p.sensitiveOnly).toUpperCase() === "OFF" ? "OFF" : "ON");
+      if (p.jaOnly !== undefined && p.jaOnly !== "")
+        cfg.getRange("D1").setValue(String(p.jaOnly).toUpperCase() === "OFF" ? "OFF" : "ON");
       if (p.accounts !== undefined) {
         const last = Math.max(cfg.getLastRow(), 5);
         cfg.getRange(5, 1, last - 4, 1).clearContent();
@@ -106,9 +112,32 @@ function doGet(e) {
       return ok({ saved: true });
     }
 
+    // 指定No.未満の行を削除: ?action=purge&beforeNo=255
+    if (action === "purge") {
+      const beforeNo = Number((e.parameter || {}).beforeNo || 0);
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      let deleted = 0;
+      for (let r = sheet.getLastRow(); r >= 2; r--) {
+        const no = Number(sheet.getRange(r, 1).getValue()) || 0;
+        if (no < beforeNo) { sheet.deleteRow(r); deleted++; }
+      }
+      return ok({ deleted });
+    }
+
+    // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
+    if (action === "fixlayout") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      const last = sheet.getLastRow();
+      if (last >= 2) sheet.setRowHeights(2, last - 1, IMAGE_ROW_HEIGHT);
+      sheet.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+      sheet.setColumnWidth(4, 300);
+      return ok({ resized: last - 1 });
+    }
+
     const enabled = String(cfg.getRange("B1").getValue()).toUpperCase() !== "OFF";
     const threshold = Number(cfg.getRange("B2").getValue()) || 300000;
     const sensitiveOnly = String(cfg.getRange("B3").getValue()).toUpperCase() !== "OFF";
+    const jaOnly = String(cfg.getRange("D1").getValue()).toUpperCase() !== "OFF";
     const lastCfg = cfg.getLastRow();
     const accounts = lastCfg >= 5
       ? cfg.getRange(5, 1, lastCfg - 4, 1).getValues()
@@ -129,7 +158,7 @@ function doGet(e) {
         if (m) existingIds.push(m[1]);
       }
     }
-    return ok({ enabled, threshold, sensitiveOnly, accounts, keywords, existingIds });
+    return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords, existingIds });
   } catch (err) {
     return ok({ error: String(err) });
   }

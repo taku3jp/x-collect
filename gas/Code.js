@@ -11,7 +11,8 @@ const DATA_SHEET = "X収集テスト";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
 const IMAGE_COL = 6;        // F列 = 動画内容
-const IMAGE_ROW_HEIGHT = 220;
+const IMAGE_ROW_HEIGHT = 600;
+const IMAGE_COL_WIDTH = 560;
 const MAX_EXISTING_SCAN = 3000;
 
 function getToken_() {
@@ -45,7 +46,8 @@ function ensureSheets_() {
     ]]);
     data.setFrozenRows(1);
   }
-  data.setColumnWidth(IMAGE_COL, 420);
+  data.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+  data.setColumnWidth(4, 300);  // D列 = ポスト文
 }
 
 function ok(obj) {
@@ -120,6 +122,16 @@ function doGet(e) {
         if (no < beforeNo) { sheet.deleteRow(r); deleted++; }
       }
       return ok({ deleted });
+    }
+
+    // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
+    if (action === "fixlayout") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      const last = sheet.getLastRow();
+      if (last >= 2) sheet.setRowHeights(2, last - 1, IMAGE_ROW_HEIGHT);
+      sheet.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+      sheet.setColumnWidth(4, 300);
+      return ok({ resized: last - 1 });
     }
 
     const enabled = String(cfg.getRange("B1").getValue()).toUpperCase() !== "OFF";
