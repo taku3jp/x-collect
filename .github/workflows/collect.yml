@@ -32,11 +32,11 @@ jobs:
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp
-          sudo warpd-registration --accept-tos 2>/dev/null || warp-cli --accept-tos registration new
-          warp-cli mode warp
-          warp-cli connect
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
           sleep 5
-          warp-cli status || true
+          warp-cli --accept-tos status || true
           curl -s --max-time 15 https://cloudflare.com/cdn-cgi/trace | head -5
 
       - name: Restore X session
