@@ -1,0 +1,41 @@
+name: collect-x-posts
+
+on:
+  schedule:
+    # 3時間おき（毎時23分。混雑する0分を避ける）
+    - cron: "23 */3 * * *"
+  workflow_dispatch: # Actionsタブから手動実行も可能
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Restore X session
+        run: echo "$X_STATE_JSON" > state.json
+        env:
+          X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
+
+      - name: Run collector
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          MAX_SCROLLS: "15"
+          MAX_SHOTS: "25"
+        run: python collector.py
