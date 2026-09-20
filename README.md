@@ -7,6 +7,7 @@ Googleスプレッドシートに自動収集する。GitHub Actionsで3時間�
 
 ```
 GitHub Actions (3時間おき / 無料)
+  └─ Cloudflare WARP で出口IPを住宅相当に（データセンターIPはXがブロックするため）
   └─ collector.py
        1. Apps Script から設定をGET（対象アカウント・閾値・収集済みID）
        2. state.json のXセッションで「おすすめTL(For You)」を限界まで巡回
@@ -99,6 +100,8 @@ GitHubリポジトリの **Actions → collect-x-posts → Run workflow** で手
 
 ## 運用メモ
 
+- **収集対象**: デフォルトは収集アカウントのおすすめTL（For You）。
+  「設定」タブA5以降にアカウントIDを入れるとそのプロフィールTLも追加で巡回
 - **セッション切れ**: Xがセッションを無効化するとログに
   `state.jsonが無効です` と出る。手順4をやり直して `X_STATE_JSON` を更新
 - **閾値・アカウント変更**: スプシ「設定」タブを書き換えるだけで即反映
