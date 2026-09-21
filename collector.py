@@ -221,18 +221,29 @@ def get_tweet_detail(page, tweet, keywords):
                            "bookmarks", "text", "media", "date", "haystack",
                            "sensitive", "lang")})
 
-    # 返信欄（投稿者以外含む）にアフィリエイトリンクがあるかチェック
+    # 返信欄のアフィリエイトリンクをチェック
+    # reply_link: 誰かの返信にキーワード一致のURL
+    # self_reply_link: 投稿者本人の返信にx.com以外の外部URL（bit.ly等の短縮含む）
     tweet["reply_link"] = False
+    tweet["self_reply_link"] = False
     for tr in all_results:
         lg = tr.get("legacy") or {}
         if lg.get("in_reply_to_status_id_str") != tweet["id"]:
             continue
         urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (lg.get("entities") or {}).get("urls", [])]
+        if not urls:
+            continue
         rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
-        # 返信に外部URLがあり、キーワード指定があればその一致も必須
-        if urls and (not keywords or any(k in rh for k in keywords)):
+        if any(k in rh for k in keywords):
             tweet["reply_link"] = True
+        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
+        author_name = (author.get("legacy") or {}).get("screen_name") or \
+            (author.get("core") or {}).get("screen_name")
+        if author_name == tweet["user"] and any(
+                "x.com" not in u and "twitter.com" not in u for u in urls):
+            tweet["self_reply_link"] = True
+        if tweet["reply_link"] and tweet["self_reply_link"]:
             break
 
     shot = None
@@ -287,11 +298,15 @@ def main():
         # 本文/リンクのキーワード一致はそのままアダアフィ判定
         if kw_match(t):
             return True
-        if sensitive_only and t["sensitive"]:
-            # 厳格モード: 返信欄にアフィリエイトリンク必須
-            # （TL収集段階では返信未確認なので緩く通し、詳細取得後に厳格判定）
-            return (not strict) or bool(t.get("reply_link"))
-        return not sensitive_only
+        if not sensitive_only:
+            # キーワードフィルタのみ運用（キーワード空なら全件）
+            return not keywords
+        # アダアフィ厳格モード:
+        # TL段階は返信未確認なので全通し。詳細取得後に
+        # 「返信欄のアフィリンク」or「本人返信の外部リンク」で判定
+        if not strict:
+            return True
+        return bool(t.get("reply_link") or t.get("self_reply_link"))
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
@@ -348,7 +363,8 @@ def main():
         candidates = [t for t in tweets.values()
                       if t["impressions"] >= threshold and t["id"] not in existing
                       and is_target(t, strict=False)]
-        candidates.sort(key=lambda t: t["sort_key"])  # 古い順→POSTで新しいのが上に来る
+        # センシティブ付きを優先（アダアフィ率が高い）、その中では古い順
+        candidates.sort(key=lambda t: (not t["sensitive"], t["sort_key"]))
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未収集: {len(candidates)}件")
 
         sent = 0
