@@ -402,16 +402,20 @@ def main():
     PROMO_RE = re.compile(
         r"発売中|配信開始|新作発売|サンプル動画|【[^】]{10,}】|予約受付|セール中"
     )
+    # 漫画系ポストの本文パターン
+    MANGA_RE = re.compile(
+        r"漫画|コミック|単行本|試し読み|電子書籍|成年向け|DLsite|FANZA同人"
+    )
 
     def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
             return False
         if t.get("verified"):
             return False  # 公式マーク付きアカウントは対象外（使い捨て垢のみ）
-        if sensitive_only and not t.get("has_video"):
-            return False  # 動画なし（画像・漫画のみ）は対象外
         if sensitive_only and PROMO_RE.search(t["text"]):
             return False  # 商業宣伝文パターンは対象外
+        if sensitive_only and MANGA_RE.search(t["text"]):
+            return False  # 漫画系ポストは対象外
         if not sensitive_only:
             # キーワードフィルタのみ運用（キーワード空なら全件）
             return not keywords or kw_match(t)
