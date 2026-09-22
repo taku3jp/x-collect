@@ -199,6 +199,8 @@ def parse_tweet(tr, fallback_user=""):
         "verified": bool(user_results.get("is_blue_verified") or
                          (user_results.get("verification") or {}).get("verified")),
         "has_video": has_video,
+        "photo_urls": [m.get("media_url_https") or "" for m in media_list
+                       if m.get("type") == "photo"],
         "lang": legacy.get("lang") or "",
     }
 
@@ -306,6 +308,47 @@ def _aff_url_level(url, keywords, resolve=True):
     if any(k in lu for k in keywords):
         return 1
     return 0
+
+
+def _image_is_manga(url):
+    """画像URLを取得して漫画/イラストっぽいかピクセル解析で判定。
+    白黒漫画ページ: 彩度≈0で色数が極端に少ない or 白地率が高い
+    カラーイラスト: ベタ塗り率（隣接同色）が高く輪郭線が密
+    写真: 色数・中間調が多くベタ塗り率が低い（センサーノイズ由来）"""
+    try:
+        import io
+        from PIL import Image, ImageFilter
+        u = url + ("&" if "?" in url else "?") + "name=small"
+        req = urllib.request.Request(u, headers={"User-Agent": _RESOLVE_UA})
+        with urllib.request.urlopen(req, timeout=15) as res:
+            img = Image.open(io.BytesIO(res.read())).convert("RGB")
+        img.thumbnail((240, 240))
+        w, h = img.size
+        n = w * h
+        px = img.load()
+        flat = white = sat_sum = 0
+        colors = set()
+        for y in range(h):
+            for x in range(w):
+                r, g, b = px[x, y]
+                colors.add((r >> 3, g >> 3, b >> 3))
+                sat_sum += max(r, g, b) - min(r, g, b)
+                if r > 235 and g > 235 and b > 235:
+                    white += 1
+                if x < w - 1:
+                    r2, g2, b2 = px[x + 1, y]
+                    if abs(r - r2) < 8 and abs(g - g2) < 8 and abs(b - b2) < 8:
+                        flat += 1
+        sat = sat_sum / (255 * n)
+        white /= n
+        flat /= n
+        edge = sum(1 for v in img.convert("L").filter(
+            ImageFilter.FIND_EDGES).getdata() if v > 80) / n
+        if sat <= 0.08 and (len(colors) <= 100 or white >= 0.35):
+            return True
+        return flat >= 0.50 and edge >= 0.18
+    except Exception:
+        return False
 
 
 def _author_name(tr):
@@ -608,9 +651,10 @@ def main():
     PROMO_RE = re.compile(
         r"発売中|配信開始|新作発売|サンプル動画|【[^】]{10,}】|予約受付|セール中"
     )
-    # 漫画系ポストの本文パターン
+    # 漫画系ポストの本文パターン（「（1/4）」等の分割ページ表記含む）
     MANGA_RE = re.compile(
         r"漫画|コミック|単行本|試し読み|電子書籍|成年向け|DLsite|FANZA同人"
+        r"|マンガ|同人誌|CG集|エロゲ|（\s*\d+\s*/\s*\d+\s*）|\(\s*\d+\s*/\s*\d+\s*\)"
     )
 
     def is_target(t, strict=True):
@@ -709,6 +753,13 @@ def main():
             if not is_target(t, strict=True):
                 print(f"  skip (アフィリンクなし等): {t['url']}")
                 continue
+
+            # 画像のみポストは中身を解析して漫画/イラストを弾く
+            if not t.get("has_video") and t.get("photo_urls"):
+                shots = t["photo_urls"][:4]
+                if sum(_image_is_manga(u) for u in shots) * 2 >= len(shots):
+                    print(f"  skip (漫画/イラスト画像): {t['url']}")
+                    continue
 
             row = {
                 "date": t["date"], "url": t["url"], "text": t["text"],
