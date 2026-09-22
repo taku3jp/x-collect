@@ -224,7 +224,8 @@ def get_tweet_detail(page, tweet, keywords):
                            "url_haystack", "sensitive", "lang")})
 
     # 返信欄のアフィリエイトリンクをチェック
-    # reply_link: 誰かの返信にキーワード一致のURL
+    # reply_link: 誰かの返信にキーワード一致URL、または別垢ポストへのx.comリンク
+    #             （アフィリングの相互誘導パターン）
     # self_reply_link: 投稿者本人の返信にx.com以外の外部URL（bit.ly等の短縮含む）
     tweet["reply_link"] = False
     tweet["self_reply_link"] = False
@@ -237,11 +238,18 @@ def get_tweet_detail(page, tweet, keywords):
         if not urls:
             continue
         rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
-        if any(k in rh for k in keywords):
-            tweet["reply_link"] = True
         author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
         author_name = (author.get("legacy") or {}).get("screen_name") or \
             (author.get("core") or {}).get("screen_name")
+        if any(k in rh for k in keywords):
+            tweet["reply_link"] = True
+        # 別アカウントのポストへ誘導する返信（リング型アフィ）
+        if author_name != tweet["user"] and any(
+                re.search(r"(x\.com|twitter\.com)/(?!i/|home|explore|search)"
+                          r"[^/]+/status/", u) and
+                f"/{tweet['user']}/" not in u for u in urls):
+            tweet["reply_link"] = True
+        # 本人返信に外部リンク
         if author_name == tweet["user"] and any(
                 "x.com" not in u and "twitter.com" not in u for u in urls):
             tweet["self_reply_link"] = True
@@ -302,10 +310,10 @@ def main():
             return not keywords or kw_match(t)
         # アダアフィ厳格モード:
         # TL段階は返信未確認なので全通し。詳細取得後に
-        # 「本人返信の外部リンク」or「本文リンクがアフィドメイン一致」のみ採用
+        # 「返信欄のアフィリンク構造」or「本文リンクがアフィドメイン一致」のみ採用
         if not strict:
             return True
-        return bool(t.get("self_reply_link") or
+        return bool(t.get("reply_link") or t.get("self_reply_link") or
                     any(k in t["url_haystack"] for k in keywords))
 
     if not accounts:
