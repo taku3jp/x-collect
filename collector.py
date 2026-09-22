@@ -195,15 +195,19 @@ def scrape_timeline(page, url, captured, for_you=False):
 
 
 def _reply_scan(all_results, tweet_id, user, keywords):
-    """返信を走査: (キーワードURL返信あり, 本人外部リンク返信あり, リングURL一覧)"""
+    """会話スレッド内のポストを走査（直接返信だけでなくネストも含む）
+    returns: (キーワードURL返信あり, 本人外部リンク返信あり, リングURL一覧)"""
     kw_reply = self_link = False
     ring_urls = []
     for tr in all_results:
         lg = tr.get("legacy") or {}
-        if lg.get("in_reply_to_status_id_str") != tweet_id:
+        if tr.get("rest_id") == tweet_id:
             continue
         urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (lg.get("entities") or {}).get("urls", [])]
+        qs = (lg.get("quoted_status_permalink") or {}).get("expanded")
+        if qs:
+            urls.append(qs)
         if not urls:
             continue
         rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
@@ -282,6 +286,25 @@ def get_tweet_detail(page, tweet, keywords):
     page.on("response", on_response)
     page.goto(tweet["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_timeout(4000)
+
+    # 「さらに返信を表示」系の折りたたみを展開（スパム判定返信にアフィリンクが多い）
+    try:
+        for _ in range(3):
+            btns = page.get_by_text(
+                re.compile("返信をさらに表示|Show more replies")).all()
+            if not btns:
+                break
+            for b in btns:
+                try:
+                    b.click(timeout=1500)
+                except Exception:
+                    pass
+            page.wait_for_timeout(2500)
+            page.mouse.wheel(0, 2000)
+            page.wait_for_timeout(1500)
+    except Exception:
+        pass
+
     page.remove_listener("response", on_response)
 
     all_results = []
