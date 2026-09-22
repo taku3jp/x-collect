@@ -124,6 +124,19 @@ function doGet(e) {
       return ok({ deleted });
     }
 
+    // 指定status idを含むURLの行を削除: ?action=delete&ids=123,456
+    if (action === "delete") {
+      const ids = String((e.parameter || {}).ids || "").split(",")
+        .map(s => s.trim()).filter(Boolean);
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      let deleted = 0;
+      for (let r = sheet.getLastRow(); r >= 2; r--) {
+        const url = String(sheet.getRange(r, 3).getValue());
+        if (ids.some(id => url.includes(id))) { sheet.deleteRow(r); deleted++; }
+      }
+      return ok({ deleted });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);

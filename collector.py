@@ -218,16 +218,18 @@ def _reply_scan(all_results, tweet_id, user, keywords):
             urls.append(qs)
         if not urls:
             continue
-        rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
+        # キーワード一致はURLのみで判定（本文ワードでの誤検出を防ぐ）
+        uh = " ".join(urls).lower()
+        kw_hit = any(k in uh for k in keywords)
         author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
         name = (author.get("legacy") or {}).get("screen_name") or \
             (author.get("core") or {}).get("screen_name")
-        if any(k in rh for k in keywords):
+        if kw_hit:
             kw_reply = True
         if name == user:
             # 本人返信もキーワード一致必須（商業AV等を除外するため）
             if any("x.com" not in u and "twitter.com" not in u for u in urls) \
-                    and any(k in rh for k in keywords):
+                    and kw_hit:
                 self_link = True
         else:
             for u in urls:
@@ -270,7 +272,10 @@ def _dest_is_affiliate(page, ring_urls, keywords):
         lg = main.get("legacy") or {}
         dest_urls = [u2.get("expanded_url") or u2.get("url") or ""
                      for u2 in (lg.get("entities") or {}).get("urls", [])]
-        dh = ((lg.get("full_text") or "") + " " + " ".join(dest_urls)).lower()
+        qs = (lg.get("quoted_status_permalink") or {}).get("expanded")
+        if qs:
+            dest_urls.append(qs)
+        dh = " ".join(dest_urls).lower()
         if any(k in dh for k in keywords):
             return True
         kw, selfl, _ = _reply_scan(results, did, duser, keywords)
