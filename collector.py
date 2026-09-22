@@ -213,7 +213,9 @@ def _reply_scan(all_results, tweet_id, user, keywords):
         if any(k in rh for k in keywords):
             kw_reply = True
         if name == user:
-            if any("x.com" not in u and "twitter.com" not in u for u in urls):
+            # 本人返信もキーワード一致必須（商業AV等を除外するため）
+            if any("x.com" not in u and "twitter.com" not in u for u in urls) \
+                    and any(k in rh for k in keywords):
                 self_link = True
         else:
             for u in urls:
