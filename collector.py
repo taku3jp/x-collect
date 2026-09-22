@@ -11,6 +11,7 @@
 """
 
 import base64
+import http.cookiejar
 import json
 import os
 import re
@@ -77,7 +78,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(NoRedirect)
+# Apps Scriptのリダイレクトはcookieを要求することがあるためCookieJar付き
+_opener = urllib.request.build_opener(
+    NoRedirect, urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 
 def call_api(payload=None, params=""):
@@ -92,7 +95,7 @@ def call_api(payload=None, params=""):
             url += ("&" if "?" in url else "?") + f"token={TOKEN}&" + params
 
         try:
-            for _ in range(5):
+            for _ in range(8):
                 req = urllib.request.Request(
                     url, data=data, method="POST" if data else "GET")
                 if data:
