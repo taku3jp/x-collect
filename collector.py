@@ -106,6 +106,10 @@ def parse_tweet(tr, fallback_user=""):
     screen_name = (user_results.get("legacy") or {}).get("screen_name") or \
         (user_results.get("core") or {}).get("screen_name") or fallback_user
 
+    media_types = [m.get("type") for m in
+                   ((legacy.get("extended_entities") or {}).get("media") or [])]
+    has_video = any(t in ("video", "animated_gif") for t in media_types)
+
     media_urls = []
     for m in ((legacy.get("extended_entities") or {}).get("media") or []):
         if m.get("type") == "photo":
@@ -161,6 +165,7 @@ def parse_tweet(tr, fallback_user=""):
         "sensitive": sensitive,
         "verified": bool(user_results.get("is_blue_verified") or
                          (user_results.get("verification") or {}).get("verified")),
+        "has_video": has_video,
         "lang": legacy.get("lang") or "",
     }
 
@@ -332,7 +337,8 @@ def get_tweet_detail(page, tweet, keywords):
             tweet.update({k: fresh[k] for k in
                           ("impressions", "likes", "reposts", "replies",
                            "bookmarks", "text", "media", "date", "haystack",
-                           "url_haystack", "sensitive", "lang", "verified")})
+                           "url_haystack", "sensitive", "lang", "verified",
+                           "has_video")})
 
     # 返信欄のアフィリエイト構造をチェック
     # reply_link: 返信のキーワード一致URL、またはリング先ポストにアフィリンク
@@ -392,11 +398,20 @@ def main():
     def kw_match(t):
         return any(k in t["haystack"] for k in keywords)
 
+    # 商業宣伝っぽい本文パターン（同人AVの釣り文には出ない表現）
+    PROMO_RE = re.compile(
+        r"発売中|配信開始|新作発売|サンプル動画|【[^】]{10,}】|予約受付|セール中"
+    )
+
     def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
             return False
         if t.get("verified"):
             return False  # 公式マーク付きアカウントは対象外（使い捨て垢のみ）
+        if sensitive_only and not t.get("has_video"):
+            return False  # 動画なし（画像・漫画のみ）は対象外
+        if sensitive_only and PROMO_RE.search(t["text"]):
+            return False  # 商業宣伝文パターンは対象外
         if not sensitive_only:
             # キーワードフィルタのみ運用（キーワード空なら全件）
             return not keywords or kw_match(t)
