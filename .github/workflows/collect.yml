@@ -6,29 +6,28 @@ on:
     - cron: "23 */3 * * *"
   workflow_dispatch: # Actionsタブから手動実行も可能
     inputs:
-      delete_ids:
-        description: "削除するstatus ID（カンマ区切り。指定時は削除のみ実行）"
+      gas_query:
+        description: "Webhookクエリ（例: action=delete&ids=123,456 / action=list）"
         required: false
         default: ""
 
 jobs:
-  delete:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delete_ids != '' }}
+  gas:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.gas_query != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Delete rows by status id
+      - name: Call Apps Script webhook
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
-          IDS: ${{ github.event.inputs.delete_ids }}
+          QUERY: ${{ github.event.inputs.gas_query }}
         run: |
-          resp=$(curl -sfL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&action=delete&ids=$IDS")
+          resp=$(curl -sfL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&$QUERY")
           echo "$resp"
-          echo "$resp" | grep -q '"deleted"'
 
   collect:
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.delete_ids == '' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.gas_query == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

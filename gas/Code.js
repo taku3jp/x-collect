@@ -137,6 +137,17 @@ function doGet(e) {
       return ok({ deleted });
     }
 
+    // 全行のNo+URLを返す（監査用）: ?action=list
+    if (action === "list") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      const rows = [];
+      for (let r = 2; r <= sheet.getLastRow(); r++) {
+        rows.push({ no: sheet.getRange(r, 1).getValue(),
+                    url: String(sheet.getRange(r, 3).getValue()) });
+      }
+      return ok({ rows });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);
@@ -230,4 +241,26 @@ function doPost(e) {
 function getImageFolder_() {
   const it = DriveApp.getFoldersByName(IMAGE_FOLDER_NAME);
   return it.hasNext() ? it.next() : DriveApp.createFolder(IMAGE_FOLDER_NAME);
+}
+
+// 開発用: status idを含むURLの行を削除。clasp run devDeleteByStatusIds で実行
+function devDeleteByStatusIds(ids) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DATA_SHEET);
+  let deleted = 0;
+  for (let r = sheet.getLastRow(); r >= 2; r--) {
+    const url = String(sheet.getRange(r, 3).getValue());
+    if (ids.some(id => url.includes(String(id)))) {
+      sheet.deleteRow(r);
+      deleted++;
+    }
+  }
+  const rows = [];
+  for (let r = 2; r <= sheet.getLastRow(); r++) {
+    rows.push(sheet.getRange(r, 1).getValue() + "\t" + sheet.getRange(r, 3).getValue());
+  }
+  return JSON.stringify({ deleted, remaining: rows });
+}
+
+function devPing() {
+  return "pong";
 }
