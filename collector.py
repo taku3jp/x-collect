@@ -750,7 +750,8 @@ def main():
                     continue
 
             row = {
-                "date": t["date"], "url": t["url"], "text": t["text"],
+                "date": datetime.now(JST).strftime("%Y/%m/%d %H:%M"),
+                "url": t["url"], "text": t["text"],
                 "media": t["media"], "impressions": t["impressions"],
                 "likes": t["likes"], "reposts": t["reposts"],
                 "bookmarks": t["bookmarks"],
