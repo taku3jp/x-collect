@@ -17,6 +17,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +39,37 @@ NAV_TIMEOUT = 60_000
 TIMELINE_OPS = ("HomeTimeline", "UserTweets", "UserMedia")
 
 STATUS_RE = re.compile(r"/status/(\d+)")
+
+# 除外ドメイン: 商業AV＋漫画系。短縮/誘導リンクの遷移先に現れたら
+# アフィ証拠に数えず、本人の導線にあれば投稿自体を除外
+BLOCKED_DOMAINS = ("fanza", "dmm.co.jp", "dmm.com", "mgstage", "sokmil",
+                   "duga", "digiket", "dlsite", "pixiv.net", "fanbox.cc",
+                   "booth.pm")
+
+# 同人ファンクラブ系プラットフォーム。証拠URLは最終的にこれらへ着地すること
+FANCLUB_DOMAINS = ("myfans", "fantia", "onlyfans", "fansly", "fanvue",
+                   "candfans", "fc2", "stripchat", "chaturbate", "xfans")
+
+# 遷移先を確認する短縮・誘導・リンク集ドメイン（URL自体は着地とみなさない）
+REDIRECT_HOSTS = (
+    "x.gd", "is.gd", "v.gd", "bit.ly", "cutt.ly", "tinyurl.", "t.ly",
+    "reurl.cc", "rb.gy", "shorturl.", "urx.", "p.tl", "ow.ly",
+    "mfco.link", "loknote77", "videy.yt", "videi.in", "ho-zuki", "omg10",
+    "lit.link", "linktr.ee", "potofu", "instabio", "bio.site",
+    "campsite", "solo.to", "allmylinks", "linkr.")
+
+# 200応答のHTML内リンクまで確認するリンク集ドメイン
+AGGREGATOR_HOSTS = ("lit.link", "linktr.ee", "potofu", "instabio",
+                    "bio.site", "campsite", "solo.to", "allmylinks", "linkr.")
+
+# 生メディア直リンクのCDN。解決失敗時も証拠にしない（寄生botが貼り回すため）
+CDN_MEDIA_HOSTS = ("videy.yt", "videi.in")
+
+_RESOLVE_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+# URL -> (経由URL一覧, 最終URL, 最終HTML先頭, 応答あり)（実行中のキャッシュ）
+_chain_cache = {}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -123,9 +155,10 @@ def parse_tweet(tr, fallback_user=""):
     # キーワード判定用: 本文+展開済みURL+カードURLをまとめた文字列
     ext_urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (legacy.get("entities") or {}).get("urls", [])]
-    card = json.dumps(tr.get("card") or {})
-    url_haystack = (" ".join(ext_urls) + " " + card).lower()
-    haystack = (legacy.get("full_text") or "") + " " + " ".join(ext_urls) + " " + card
+    # カード説明文はURL証拠から除外（リンク先ページの宣伝文にfantia等が
+    # 書かれているだけで誤検出するため）
+    url_haystack = " ".join(ext_urls).lower()
+    haystack = (legacy.get("full_text") or "") + " " + " ".join(ext_urls)
 
     # X公式のセンシティブ判定（メディア・ポスト・投稿者のいずれか）
     media_list = (legacy.get("extended_entities") or {}).get("media") or \
@@ -209,86 +242,242 @@ def scrape_timeline(page, url, captured, for_you=False):
     print(f"  scrolls={i+1} captured_responses={len(captured)}")
 
 
+def _resolve_chain(url, max_hops=4):
+    """リダイレクトチェインをたどる。リンク集は最終HTMLも取得。
+    returns (経由URL一覧, 最終URL, HTML先頭, HTTP応答があったか)"""
+    if url in _chain_cache:
+        return _chain_cache[url]
+    hops = []
+    cur = url
+    html = ""
+    responded = False
+    for _ in range(max_hops):
+        try:
+            req = urllib.request.Request(cur, headers={"User-Agent": _RESOLVE_UA})
+            with _opener.open(req, timeout=10) as res:
+                responded = True
+                ct = (res.headers.get("Content-Type") or "").lower()
+                host = urllib.parse.urlparse(cur).netloc.lower()
+                if "text/html" in ct and any(a in host for a in AGGREGATOR_HOSTS):
+                    html = res.read(200_000).decode("utf-8", "ignore").lower()
+                break
+        except urllib.error.HTTPError as e:
+            responded = True
+            loc = e.headers.get("Location") \
+                if e.code in (301, 302, 303, 307, 308) else None
+            if not loc:
+                break
+            cur = urllib.parse.urljoin(cur, loc)
+            hops.append(cur)
+        except Exception:
+            break
+    _chain_cache[url] = (hops, cur, html, responded)
+    return _chain_cache[url]
+
+
+def _aff_url_level(url, keywords, resolve=True):
+    """URLの同人アフィ証拠強度:
+    2=ファンクラブ系に着地確認 / 1=キーワードドメイン一致（着地未確認）/
+    0=非証拠 / -1=除外ドメイン（商業AV・漫画系）着地"""
+    lu = url.lower()
+    if any(d in lu for d in BLOCKED_DOMAINS):
+        return -1
+    if any(d in lu for d in FANCLUB_DOMAINS):
+        return 2
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if any(h in host for h in REDIRECT_HOSTS):
+        if not resolve:
+            # 解決枠切れ: キーワード一致のみ弱証拠
+            return 1 if any(k in lu for k in keywords) else 0
+        hops, final, html, ok = _resolve_chain(url)
+        if not ok:
+            if any(h in host for h in CDN_MEDIA_HOSTS):
+                return 0
+            return 1 if any(k in lu for k in keywords) else 0
+        chain = " ".join(hops + [final]).lower() + " " + html
+        if any(d in chain for d in BLOCKED_DOMAINS):
+            return -1
+        if any(d in chain for d in FANCLUB_DOMAINS):
+            return 2
+        # 生メディア直リンク（mp4等）は証拠にしない
+        if re.search(r"\.(mp4|m3u8|webm|mov|ts|jpg|png)([?/#]|$)", final.lower()):
+            return 0
+        return 0  # 着地が同人系でない（寄生CDN等）は証拠にしない
+    if any(k in lu for k in keywords):
+        return 1
+    return 0
+
+
+def _author_name(tr):
+    u = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
+    return (u.get("legacy") or {}).get("screen_name") or \
+        (u.get("core") or {}).get("screen_name")
+
+
+def _post_urls(lg):
+    urls = [u.get("expanded_url") or u.get("url") or ""
+            for u in (lg.get("entities") or {}).get("urls", [])]
+    qs = (lg.get("quoted_status_permalink") or {}).get("expanded")
+    if qs:
+        urls.append(qs)
+    return urls
+
+
 def _reply_scan(all_results, tweet_id, user, keywords):
     """会話スレッド内のポストを走査（直接返信だけでなくネストも含む）
-    returns: (キーワードURL返信あり, 本人外部リンク返信あり, リングURL一覧)"""
-    kw_reply = self_link = False
+    returns: (キーワードURL返信あり, 本人外部リンク返信あり,
+              他人リングURL一覧, 本人リングURL一覧, 本人の商業AVリンクあり)"""
+    kw_reply = self_link = author_blocked = False
     ring_urls = []
+    self_ring = []
+    budget = [8]  # 短縮URLの遷移先解決は最大8回/走査
+
+    # 会話メンバーに限定（レスポンス内のおすすめ・広告など無関係ポストを除外）
+    by_id = {tr.get("rest_id"): tr for tr in all_results}
+    conv = {tweet_id}
+    cur = by_id.get(tweet_id)
+    while cur:  # 祖先チェーン
+        pid = (cur.get("legacy") or {}).get("in_reply_to_status_id_str")
+        if not pid or pid in conv:
+            break
+        conv.add(pid)
+        cur = by_id.get(pid)
+    changed = True
+    while changed:  # focalへの返信＋ネスト返信を推移的に追加
+        changed = False
+        for tr in all_results:
+            rid = tr.get("rest_id")
+            if rid and rid not in conv:
+                pid = (tr.get("legacy") or {}).get("in_reply_to_status_id_str")
+                if pid in conv:
+                    conv.add(rid)
+                    changed = True
+
     for tr in all_results:
         lg = tr.get("legacy") or {}
-        if tr.get("rest_id") == tweet_id:
+        rid = tr.get("rest_id")
+        if rid == tweet_id or rid not in conv:
             continue
-        urls = [u.get("expanded_url") or u.get("url") or ""
-                for u in (lg.get("entities") or {}).get("urls", [])]
-        qs = (lg.get("quoted_status_permalink") or {}).get("expanded")
-        if qs:
-            urls.append(qs)
+        urls = _post_urls(lg)
         if not urls:
             continue
-        # キーワード一致はURLのみで判定（本文ワードでの誤検出を防ぐ）
-        uh = " ".join(urls).lower()
-        kw_hit = any(k in uh for k in keywords)
-        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
-        name = (author.get("legacy") or {}).get("screen_name") or \
-            (author.get("core") or {}).get("screen_name")
-        if kw_hit:
-            kw_reply = True
+        name = _author_name(tr)
+        # 各URLのアフィ証拠強度を判定（短縮は遷移先まで確認）
+        ev_hit = False
+        for u in urls:
+            host = urllib.parse.urlparse(u).netloc.lower()
+            resolve = budget[0] > 0 and \
+                any(h in host for h in REDIRECT_HOSTS)
+            if resolve:
+                budget[0] -= 1
+            lv = _aff_url_level(u, keywords, resolve=resolve)
+            if lv < 0:
+                # 本人ポストの商業AV/漫画リンクは投稿自体の除外理由
+                if name == user:
+                    author_blocked = True
+                continue
+            if lv > 0:
+                ev_hit = True
         if name == user:
-            # 本人返信もキーワード一致必須（商業AV等を除外するため）
-            if any("x.com" not in u and "twitter.com" not in u for u in urls) \
-                    and kw_hit:
+            for u in urls:
+                if re.search(r"(?:x\.com|twitter\.com)/[^/]+/status/\d+", u):
+                    self_ring.append(u)
+            # 本人返信もURL証拠必須（外部URLのみ。x.comリンクはリング扱い）
+            if ev_hit and any("x.com" not in u and "twitter.com" not in u
+                              for u in urls):
                 self_link = True
         else:
             for u in urls:
                 if re.search(r"(?:x\.com|twitter\.com)/[^/]+/status/\d+", u) \
                         and f"/{user}/" not in u:
                     ring_urls.append(u)
-    return kw_reply, self_link, ring_urls
+        if ev_hit:
+            kw_reply = True
+    return kw_reply, self_link, ring_urls, self_ring, author_blocked
+
+
+def _fetch_status_thread(page, url):
+    """x.comポストURLを開きTweetDetailを捕捉。returns (user, id, tweet_results)"""
+    m = re.search(r"(?:x\.com|twitter\.com)/([^/]+)/status/(\d+)", url)
+    if not m:
+        return None, None, []
+    duser, did = m.group(1), m.group(2)
+    captured = []
+
+    def on_response(res):
+        if "TweetDetail" in res.url or "TweetResultByRestId" in res.url:
+            try:
+                captured.append(res.json())
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+    try:
+        page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception:
+        pass
+    page.remove_listener("response", on_response)
+
+    results = []
+    for body in captured:
+        iter_tweet_results(body, results)
+    return duser, did, results
+
+
+def _thread_has_commercial(results, author=None):
+    """スレッド内のURLに除外ドメインがあればTrue（短縮は遷移先も確認）。
+    author指定時はその作者のポストのみ対象（第三者スパムは除外根拠にしない）。"""
+    budget = [6]
+    for tr in results:
+        if author and _author_name(tr) != author:
+            continue
+        for u in _post_urls(tr.get("legacy") or {}):
+            if any(d in u.lower() for d in BLOCKED_DOMAINS):
+                return True
+            host = urllib.parse.urlparse(u).netloc.lower()
+            if budget[0] > 0 and any(h in host for h in REDIRECT_HOSTS):
+                budget[0] -= 1
+                hops, final, html, _ = _resolve_chain(u)
+                chain = " ".join(hops + [final]).lower() + " " + html
+                if any(d in chain for d in BLOCKED_DOMAINS):
+                    return True
+    return False
+
+
+def _thread_has_affiliate(results, did, duser, keywords):
+    """リング先ポスト本人・またはその作者の返信にアフィ着地URLがあるか。
+    第三者の返信は数えない（作者の収益化導線だけを見る）。"""
+    for tr in results:
+        if tr.get("rest_id") == did or _author_name(tr) == duser:
+            for u in _post_urls(tr.get("legacy") or {}):
+                if _aff_url_level(u, keywords) >= 1:
+                    return True
+    return False
 
 
 def _dest_is_affiliate(page, ring_urls, keywords):
-    """リング返信のリンク先ポストを1段掘り、アフィリンク構造があるか確認。"""
-    for u in ring_urls[:3]:
-        m = re.search(r"(?:x\.com|twitter\.com)/([^/]+)/status/(\d+)", u)
-        if not m:
-            continue
-        duser, did = m.group(1), m.group(2)
-        captured = []
-
-        def on_response(res):
-            if "TweetDetail" in res.url or "TweetResultByRestId" in res.url:
-                try:
-                    captured.append(res.json())
-                except Exception:
-                    pass
-
-        page.on("response", on_response)
-        try:
-            page.goto(u, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-        except Exception:
-            pass
-        page.remove_listener("response", on_response)
-
-        results = []
-        for body in captured:
-            iter_tweet_results(body, results)
-        main = next((t for t in results if t.get("rest_id") == did), None)
-        if not main:
-            continue
-        lg = main.get("legacy") or {}
-        dest_urls = [u2.get("expanded_url") or u2.get("url") or ""
-                     for u2 in (lg.get("entities") or {}).get("urls", [])]
-        qs = (lg.get("quoted_status_permalink") or {}).get("expanded")
-        if qs:
-            dest_urls.append(qs)
-        dh = " ".join(dest_urls).lower()
-        if any(k in dh for k in keywords):
-            return True
-        kw, selfl, _ = _reply_scan(results, did, duser, keywords)
-        if kw or selfl:
+    """他人返信のx.comリンク先ポストを1段掘り、アフィリンク構造があるか確認。"""
+    for u in list(dict.fromkeys(ring_urls))[:3]:
+        duser, did, results = _fetch_status_thread(page, u)
+        if results and _thread_has_affiliate(results, did, duser, keywords):
             return True
     return False
+
+
+def _self_ring_scan(page, ring_urls, keywords):
+    """本人返信のx.comリンク先を1段掘る。
+    returns: (リンク先スレッドに商業AVあり, アフィリンク構造あり)"""
+    commercial = affiliate = False
+    for u in list(dict.fromkeys(ring_urls))[:2]:
+        duser, did, results = _fetch_status_thread(page, u)
+        if not results:
+            continue
+        if _thread_has_commercial(results, duser):
+            commercial = True
+        if _thread_has_affiliate(results, did, duser, keywords):
+            affiliate = True
+    return commercial, affiliate
 
 
 def get_tweet_detail(page, tweet, keywords):
@@ -339,14 +528,25 @@ def get_tweet_detail(page, tweet, keywords):
                            "bookmarks", "text", "media", "date", "haystack",
                            "url_haystack", "sensitive", "lang", "verified",
                            "has_video")})
+            # 本文リンクの証拠判定（短縮は遷移先まで確認。カード説明文は対象外）
+            murls = _post_urls(tr.get("legacy") or {})
+            mlv = [_aff_url_level(u, keywords) for u in murls]
+            if any(v < 0 for v in mlv):
+                tweet["commercial"] = True
+            tweet["own_link_ok"] = any(v > 0 for v in mlv)
 
     # 返信欄のアフィリエイト構造をチェック
-    # reply_link: 返信のキーワード一致URL、またはリング先ポストにアフィリンク
-    # self_reply_link: 投稿者本人の返信にx.com以外の外部URL（bit.ly等の短縮含む）
-    kw_reply, self_link, ring_urls = _reply_scan(
+    # 証拠は「ファンクラブ系ドメインへの着地が確認できるURL」のみ
+    # （寄生botが貼るvidei.in等のCDN直リンクは着地先が非ファンクラブなので弾く）
+    # reply_link: 会話内返信のアフィURL、またはリング先ポストのアフィ構造
+    # self_reply_link: 本人返信のアフィ外部URL
+    # commercial: 本人ポスト/本人リング先に商業AV・漫画系リンク → 収集しない
+    kw_reply, self_link, ring_urls, self_ring, author_blocked = _reply_scan(
         all_results, tweet["id"], tweet["user"], keywords)
     tweet["reply_link"] = kw_reply
     tweet["self_reply_link"] = self_link
+    if author_blocked:
+        tweet["commercial"] = True
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
@@ -370,6 +570,12 @@ def get_tweet_detail(page, tweet, keywords):
     # スクショ後にリング先を1段掘ってアフィリンク構造を確認
     if not tweet["reply_link"] and ring_urls:
         tweet["reply_link"] = _dest_is_affiliate(page, ring_urls, keywords)
+    # 本人返信のx.comリンク先も確認（商業AV着地なら除外、同人アフィなら証拠）
+    if self_ring:
+        commercial, aff = _self_ring_scan(page, self_ring, keywords)
+        if commercial:
+            tweet["commercial"] = True
+        tweet["reply_link"] = tweet["reply_link"] or aff
     return shot
 
 
@@ -412,6 +618,8 @@ def main():
             return False
         if t.get("verified"):
             return False  # 公式マーク付きアカウントは対象外（使い捨て垢のみ）
+        if t.get("commercial"):
+            return False  # 本人のリンク先が商業AV（FANZA/DMM/MGS等）
         if sensitive_only and PROMO_RE.search(t["text"]):
             return False  # 商業宣伝文パターンは対象外
         if sensitive_only and MANGA_RE.search(t["text"]):
@@ -425,7 +633,8 @@ def main():
         if not strict:
             return True
         return bool(t.get("reply_link") or t.get("self_reply_link") or
-                    any(k in t["url_haystack"] for k in keywords))
+                    t.get("own_link_ok",
+                          any(k in t["url_haystack"] for k in keywords)))
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
