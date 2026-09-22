@@ -112,6 +112,7 @@ def parse_tweet(tr, fallback_user=""):
     ext_urls = [u.get("expanded_url") or u.get("url") or ""
                 for u in (legacy.get("entities") or {}).get("urls", [])]
     card = json.dumps(tr.get("card") or {})
+    url_haystack = (" ".join(ext_urls) + " " + card).lower()
     haystack = (legacy.get("full_text") or "") + " " + " ".join(ext_urls) + " " + card
 
     # X公式のセンシティブ判定（メディア・ポスト・投稿者のいずれか）
@@ -148,6 +149,7 @@ def parse_tweet(tr, fallback_user=""):
         "replies": int(legacy.get("reply_count") or 0),
         "bookmarks": int(legacy.get("bookmark_count") or 0),
         "haystack": haystack,
+        "url_haystack": url_haystack,
         "sensitive": sensitive,
         "lang": legacy.get("lang") or "",
     }
@@ -219,7 +221,7 @@ def get_tweet_detail(page, tweet, keywords):
             tweet.update({k: fresh[k] for k in
                           ("impressions", "likes", "reposts", "replies",
                            "bookmarks", "text", "media", "date", "haystack",
-                           "sensitive", "lang")})
+                           "url_haystack", "sensitive", "lang")})
 
     # 返信欄のアフィリエイトリンクをチェック
     # reply_link: 誰かの返信にキーワード一致のURL
@@ -295,18 +297,16 @@ def main():
     def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
             return False
-        # 本文/リンクのキーワード一致はそのままアダアフィ判定
-        if kw_match(t):
-            return True
         if not sensitive_only:
             # キーワードフィルタのみ運用（キーワード空なら全件）
-            return not keywords
+            return not keywords or kw_match(t)
         # アダアフィ厳格モード:
         # TL段階は返信未確認なので全通し。詳細取得後に
-        # 「返信欄のアフィリンク」or「本人返信の外部リンク」で判定
+        # 「本人返信の外部リンク」or「本文リンクがアフィドメイン一致」のみ採用
         if not strict:
             return True
-        return bool(t.get("reply_link") or t.get("self_reply_link"))
+        return bool(t.get("self_reply_link") or
+                    any(k in t["url_haystack"] for k in keywords))
 
     if not accounts:
         print("対象アカウント未指定 → おすすめTLのみ収集します")
