@@ -23,9 +23,9 @@ jobs:
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           IDS: ${{ github.event.inputs.delete_ids }}
         run: |
-          resp=$(curl -sf "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&action=delete&ids=$IDS")
+          resp=$(curl -sfL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&action=delete&ids=$IDS")
           echo "$resp"
-          echo "$resp" | grep -q '"ok":true'
+          echo "$resp" | grep -q '"deleted"'
 
   collect:
     if: ${{ github.event_name == 'schedule' || github.event.inputs.delete_ids == '' }}
