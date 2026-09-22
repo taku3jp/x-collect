@@ -5,9 +5,30 @@ on:
     # 3時間おき（毎時23分。混雑する0分を避ける）
     - cron: "23 */3 * * *"
   workflow_dispatch: # Actionsタブから手動実行も可能
+    inputs:
+      delete_ids:
+        description: "削除するstatus ID（カンマ区切り。指定時は削除のみ実行）"
+        required: false
+        default: ""
 
 jobs:
+  delete:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.delete_ids != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete rows by status id
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          IDS: ${{ github.event.inputs.delete_ids }}
+        run: |
+          resp=$(curl -sf "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&action=delete&ids=$IDS")
+          echo "$resp"
+          echo "$resp" | grep -q '"ok":true'
+
   collect:
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.delete_ids == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
