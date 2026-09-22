@@ -194,6 +194,77 @@ def scrape_timeline(page, url, captured, for_you=False):
     print(f"  scrolls={i+1} captured_responses={len(captured)}")
 
 
+def _reply_scan(all_results, tweet_id, user, keywords):
+    """返信を走査: (キーワードURL返信あり, 本人外部リンク返信あり, リングURL一覧)"""
+    kw_reply = self_link = False
+    ring_urls = []
+    for tr in all_results:
+        lg = tr.get("legacy") or {}
+        if lg.get("in_reply_to_status_id_str") != tweet_id:
+            continue
+        urls = [u.get("expanded_url") or u.get("url") or ""
+                for u in (lg.get("entities") or {}).get("urls", [])]
+        if not urls:
+            continue
+        rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
+        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
+        name = (author.get("legacy") or {}).get("screen_name") or \
+            (author.get("core") or {}).get("screen_name")
+        if any(k in rh for k in keywords):
+            kw_reply = True
+        if name == user:
+            if any("x.com" not in u and "twitter.com" not in u for u in urls):
+                self_link = True
+        else:
+            for u in urls:
+                if re.search(r"(?:x\.com|twitter\.com)/[^/]+/status/\d+", u) \
+                        and f"/{user}/" not in u:
+                    ring_urls.append(u)
+    return kw_reply, self_link, ring_urls
+
+
+def _dest_is_affiliate(page, ring_urls, keywords):
+    """リング返信のリンク先ポストを1段掘り、アフィリンク構造があるか確認。"""
+    for u in ring_urls[:3]:
+        m = re.search(r"(?:x\.com|twitter\.com)/([^/]+)/status/(\d+)", u)
+        if not m:
+            continue
+        duser, did = m.group(1), m.group(2)
+        captured = []
+
+        def on_response(res):
+            if "TweetDetail" in res.url or "TweetResultByRestId" in res.url:
+                try:
+                    captured.append(res.json())
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+        try:
+            page.goto(u, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception:
+            pass
+        page.remove_listener("response", on_response)
+
+        results = []
+        for body in captured:
+            iter_tweet_results(body, results)
+        main = next((t for t in results if t.get("rest_id") == did), None)
+        if not main:
+            continue
+        lg = main.get("legacy") or {}
+        dest_urls = [u2.get("expanded_url") or u2.get("url") or ""
+                     for u2 in (lg.get("entities") or {}).get("urls", [])]
+        dh = ((lg.get("full_text") or "") + " " + " ".join(dest_urls)).lower()
+        if any(k in dh for k in keywords):
+            return True
+        kw, selfl, _ = _reply_scan(results, did, duser, keywords)
+        if kw or selfl:
+            return True
+    return False
+
+
 def get_tweet_detail(page, tweet, keywords):
     """Open the tweet permalink; capture TweetDetail JSON and screenshot.
     Also checks the reply section for affiliate links."""
@@ -223,38 +294,13 @@ def get_tweet_detail(page, tweet, keywords):
                            "bookmarks", "text", "media", "date", "haystack",
                            "url_haystack", "sensitive", "lang")})
 
-    # 返信欄のアフィリエイトリンクをチェック
-    # reply_link: 誰かの返信にキーワード一致URL、または別垢ポストへのx.comリンク
-    #             （アフィリングの相互誘導パターン）
+    # 返信欄のアフィリエイト構造をチェック
+    # reply_link: 返信のキーワード一致URL、またはリング先ポストにアフィリンク
     # self_reply_link: 投稿者本人の返信にx.com以外の外部URL（bit.ly等の短縮含む）
-    tweet["reply_link"] = False
-    tweet["self_reply_link"] = False
-    for tr in all_results:
-        lg = tr.get("legacy") or {}
-        if lg.get("in_reply_to_status_id_str") != tweet["id"]:
-            continue
-        urls = [u.get("expanded_url") or u.get("url") or ""
-                for u in (lg.get("entities") or {}).get("urls", [])]
-        if not urls:
-            continue
-        rh = ((lg.get("full_text") or "") + " " + " ".join(urls)).lower()
-        author = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
-        author_name = (author.get("legacy") or {}).get("screen_name") or \
-            (author.get("core") or {}).get("screen_name")
-        if any(k in rh for k in keywords):
-            tweet["reply_link"] = True
-        # 別アカウントのポストへ誘導する返信（リング型アフィ）
-        if author_name != tweet["user"] and any(
-                re.search(r"(x\.com|twitter\.com)/(?!i/|home|explore|search)"
-                          r"[^/]+/status/", u) and
-                f"/{tweet['user']}/" not in u for u in urls):
-            tweet["reply_link"] = True
-        # 本人返信に外部リンク
-        if author_name == tweet["user"] and any(
-                "x.com" not in u and "twitter.com" not in u for u in urls):
-            tweet["self_reply_link"] = True
-        if tweet["reply_link"] and tweet["self_reply_link"]:
-            break
+    kw_reply, self_link, ring_urls = _reply_scan(
+        all_results, tweet["id"], tweet["user"], keywords)
+    tweet["reply_link"] = kw_reply
+    tweet["self_reply_link"] = self_link
 
     shot = None
     article = page.locator('article[data-testid="tweet"]').first
@@ -274,6 +320,10 @@ def get_tweet_detail(page, tweet, keywords):
         shot = article.screenshot(timeout=15_000)
     except Exception as e:
         print(f"  screenshot failed for {tweet['id']}: {e}", file=sys.stderr)
+
+    # スクショ後にリング先を1段掘ってアフィリンク構造を確認
+    if not tweet["reply_link"] and ring_urls:
+        tweet["reply_link"] = _dest_is_affiliate(page, ring_urls, keywords)
     return shot
 
 
