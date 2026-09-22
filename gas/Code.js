@@ -150,6 +150,20 @@ function doGet(e) {
       return ok({ rows });
     }
 
+    // 同一status idの重複行を削除（上=新しい行を残す）: ?action=dedupe
+    if (action === "dedupe") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      const seen = {};
+      let deleted = 0;
+      for (let r = 2; r <= sheet.getLastRow(); r++) {
+        const m = String(sheet.getRange(r, 3).getValue()).match(/status\/(\d+)/);
+        if (!m) continue;
+        if (seen[m[1]]) { sheet.deleteRow(r); r--; deleted++; }
+        else seen[m[1]] = true;
+      }
+      return ok({ deleted });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);
@@ -200,6 +214,18 @@ function doPost(e) {
     const r = body.row || {};
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(DATA_SHEET);
+
+    // 重複チェック: 同じstatus idの行が既にあれば挿入しない
+    // （定期実行と手動実行の並走で二重保存されるのを防ぐ）
+    const idm = String(r.url || "").match(/status\/(\d+)/);
+    if (idm) {
+      const last = sheet.getLastRow();
+      if (last >= 2) {
+        const urls = sheet.getRange(2, 3, last - 1, 1).getValues().flat();
+        if (urls.some(u => String(u).includes(idm[1])))
+          return ok({ saved: false, duplicate: true });
+      }
+    }
 
     // 既存No.の最大+1を採番
     const last = sheet.getLastRow();

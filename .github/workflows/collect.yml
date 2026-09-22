@@ -28,6 +28,7 @@ jobs:
 
   collect:
     if: ${{ github.event_name == 'schedule' || github.event.inputs.gas_query == '' }}
+    concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
