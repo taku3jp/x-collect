@@ -488,29 +488,12 @@ def _thread_has_commercial(results, author=None):
     return False
 
 
-def _thread_has_affiliate(results, did, duser, keywords):
-    """リング先ポスト本人・またはその作者の返信にアフィ着地URLがあるか。
-    第三者の返信は数えない（作者の収益化導線だけを見る）。"""
-    for tr in results:
-        if tr.get("rest_id") == did or _author_name(tr) == duser:
-            for u in _post_urls(tr.get("legacy") or {}):
-                if _aff_url_level(u, keywords) >= 1:
-                    return True
-    return False
-
-
-def _dest_is_affiliate(page, ring_urls, keywords):
-    """他人返信のx.comリンク先ポストを1段掘り、アフィリンク構造があるか確認。"""
-    for u in list(dict.fromkeys(ring_urls))[:3]:
-        duser, did, results = _fetch_status_thread(page, u)
-        if results and _thread_has_affiliate(results, did, duser, keywords):
-            return True
-    return False
-
-
 def _self_ring_scan(page, ring_urls, keywords):
     """本人返信のx.comリンク先を1段掘る。
-    returns: (リンク先スレッドに商業AVあり, アフィリンク構造あり)"""
+    アフィ証拠はリンク先ポスト本文のURLのみ（リンク先の返信欄まで掘ると
+    バズ→別垢バズ→返信アフィの多段宣伝チェインを拾ってしまう）。
+    商業AV除外はリンク先作者のポスト全体を対象。
+    returns: (リンク先スレッドに商業AVあり, リンク先ポスト本文にアフィURLあり)"""
     commercial = affiliate = False
     for u in list(dict.fromkeys(ring_urls))[:2]:
         duser, did, results = _fetch_status_thread(page, u)
@@ -518,7 +501,9 @@ def _self_ring_scan(page, ring_urls, keywords):
             continue
         if _thread_has_commercial(results, duser):
             commercial = True
-        if _thread_has_affiliate(results, did, duser, keywords):
+        dest = next((tr for tr in results if tr.get("rest_id") == did), None)
+        if dest and any(_aff_url_level(u2, keywords) >= 1
+                        for u2 in _post_urls(dest.get("legacy") or {})):
             affiliate = True
     return commercial, affiliate
 
@@ -584,7 +569,7 @@ def get_tweet_detail(page, tweet, keywords):
     # reply_link: 会話内返信のアフィURL、またはリング先ポストのアフィ構造
     # self_reply_link: 本人返信のアフィ外部URL
     # commercial: 本人ポスト/本人リング先に商業AV・漫画系リンク → 収集しない
-    kw_reply, self_link, ring_urls, self_ring, author_blocked = _reply_scan(
+    kw_reply, self_link, _ring, self_ring, author_blocked = _reply_scan(
         all_results, tweet["id"], tweet["user"], keywords)
     tweet["reply_link"] = kw_reply
     tweet["self_reply_link"] = self_link
@@ -610,10 +595,10 @@ def get_tweet_detail(page, tweet, keywords):
     except Exception as e:
         print(f"  screenshot failed for {tweet['id']}: {e}", file=sys.stderr)
 
-    # スクショ後にリング先を1段掘ってアフィリンク構造を確認
-    if not tweet["reply_link"] and ring_urls:
-        tweet["reply_link"] = _dest_is_affiliate(page, ring_urls, keywords)
-    # 本人返信のx.comリンク先も確認（商業AV着地なら除外、同人アフィなら証拠）
+    # 本人返信のx.comリンク先を1段掘る（商業AV着地なら除外、
+    # リンク先ポスト本文にアフィURLがあれば証拠）。
+    # 他人返信のリングは掘らない（寄生虫がバズ投稿に宣伝リンクを
+    # 貼るだけなのでフォーカルポストの証拠にならない）
     if self_ring:
         commercial, aff = _self_ring_scan(page, self_ring, keywords)
         if commercial:
