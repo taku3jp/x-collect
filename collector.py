@@ -51,29 +51,37 @@ _opener = urllib.request.build_opener(NoRedirect)
 def call_api(payload=None, params=""):
     """Call Apps Script. Handles the 302 redirect Apps Script returns by
     re-sending the request (same method/body) to the redirect target."""
-    url = APPS_SCRIPT_URL
-    data = None
-    if payload is not None:
-        data = json.dumps({**payload, "token": TOKEN}).encode()
-    elif params:
-        url += ("&" if "?" in url else "?") + f"token={TOKEN}&" + params
+    for attempt in range(4):
+        url = APPS_SCRIPT_URL
+        data = None
+        if payload is not None:
+            data = json.dumps({**payload, "token": TOKEN}).encode()
+        elif params:
+            url += ("&" if "?" in url else "?") + f"token={TOKEN}&" + params
 
-    for _ in range(5):
-        req = urllib.request.Request(url, data=data, method="POST" if data else "GET")
-        if data:
-            req.add_header("Content-Type", "text/plain")
         try:
-            with _opener.open(req, timeout=120) as res:
-                return json.loads(res.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code in (301, 302, 303, 307) and e.headers.get("Location"):
-                url = e.headers["Location"]
-                # Apps ScriptのPOSTは処理後に302を返す。リダイレクト先は
-                # 結果を取りに行くだけなのでGETに切り替える
-                data = None
+            for _ in range(5):
+                req = urllib.request.Request(
+                    url, data=data, method="POST" if data else "GET")
+                if data:
+                    req.add_header("Content-Type", "text/plain")
+                try:
+                    with _opener.open(req, timeout=120) as res:
+                        return json.loads(res.read().decode())
+                except urllib.error.HTTPError as e:
+                    if e.code in (301, 302, 303, 307) and e.headers.get("Location"):
+                        url = e.headers["Location"]
+                        # Apps ScriptのPOSTは処理後に302を返す。リダイレクト先は
+                        # 結果を取りに行くだけなのでGETに切り替える
+                        data = None
+                        continue
+                    raise
+            raise RuntimeError("Apps Script redirect limit exceeded")
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            if attempt < 3:
+                time.sleep(15 * (attempt + 1))
                 continue
             raise
-    raise RuntimeError("Apps Script redirect limit exceeded")
 
 
 def iter_tweet_results(obj, out):
