@@ -159,6 +159,8 @@ def parse_tweet(tr, fallback_user=""):
         "haystack": haystack,
         "url_haystack": url_haystack,
         "sensitive": sensitive,
+        "verified": bool(user_results.get("is_blue_verified") or
+                         (user_results.get("verification") or {}).get("verified")),
         "lang": legacy.get("lang") or "",
     }
 
@@ -330,7 +332,7 @@ def get_tweet_detail(page, tweet, keywords):
             tweet.update({k: fresh[k] for k in
                           ("impressions", "likes", "reposts", "replies",
                            "bookmarks", "text", "media", "date", "haystack",
-                           "url_haystack", "sensitive", "lang")})
+                           "url_haystack", "sensitive", "lang", "verified")})
 
     # 返信欄のアフィリエイト構造をチェック
     # reply_link: 返信のキーワード一致URL、またはリング先ポストにアフィリンク
@@ -393,6 +395,8 @@ def main():
     def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
             return False
+        if t.get("verified"):
+            return False  # 公式マーク付きアカウントは対象外（使い捨て垢のみ）
         if not sensitive_only:
             # キーワードフィルタのみ運用（キーワード空なら全件）
             return not keywords or kw_match(t)
