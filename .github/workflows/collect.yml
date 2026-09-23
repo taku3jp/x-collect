@@ -31,7 +31,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event.inputs.gas_query == '' }}
     concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +95,7 @@ jobs:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           MAX_SCROLLS: "300"
-          MAX_SHOTS: "60"
+          MAX_SHOTS: "120"
           HEADFUL: "1"
         run: xvfb-run -a python collector.py
 

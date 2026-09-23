@@ -31,9 +31,9 @@ APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 TOKEN = os.environ.get("APPS_SCRIPT_TOKEN", "")
 STATE_PATH = os.environ.get("X_STATE_PATH", "state.json")
 MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "300"))
-MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "60"))
+MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "120"))
 SCROLL_PAUSE = 2.0
-DETAIL_PAUSE = 3.0
+DETAIL_PAUSE = 1.0
 NAV_TIMEOUT = 60_000
 
 # X内部APIのオペレーション名（URLに含まれる文字列で判定）
@@ -536,11 +536,11 @@ def get_tweet_detail(page, tweet, keywords):
 
     page.on("response", on_response)
     page.goto(tweet["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(2500)
 
     # 「さらに返信を表示」系の折りたたみを展開（スパム判定返信にアフィリンクが多い）
     try:
-        for _ in range(3):
+        for _ in range(2):
             btns = page.get_by_text(
                 re.compile("返信をさらに表示|Show more replies")).all()
             if not btns:
@@ -550,9 +550,9 @@ def get_tweet_detail(page, tweet, keywords):
                     b.click(timeout=1500)
                 except Exception:
                     pass
-            page.wait_for_timeout(2500)
-            page.mouse.wheel(0, 2000)
             page.wait_for_timeout(1500)
+            page.mouse.wheel(0, 2000)
+            page.wait_for_timeout(1000)
     except Exception:
         pass
 
@@ -601,10 +601,10 @@ def get_tweet_detail(page, tweet, keywords):
                 pass
         article.scroll_into_view_if_needed(timeout=10_000)
         try:
-            page.wait_for_load_state("networkidle", timeout=15_000)
+            page.wait_for_load_state("networkidle", timeout=8_000)
         except Exception:
             pass
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1000)
         shot = article.screenshot(timeout=15_000)
     except Exception as e:
         print(f"  screenshot failed for {tweet['id']}: {e}", file=sys.stderr)
