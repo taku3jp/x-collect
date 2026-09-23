@@ -2,8 +2,9 @@ name: collect-x-posts
 
 on:
   schedule:
-    # 3時間おき（毎時23分。混雑する0分を避ける）
-    - cron: "23 */3 * * *"
+    # 毎時23分に起動（GitHubのscheduleは遅延・スキップされるため頻度を上げ、
+    # ワークフロー内で前回から3時間未満ならスキップして実質3時間おきにする）
+    - cron: "23 * * * *"
   workflow_dispatch: # Actionsタブから手動実行も可能
     inputs:
       gas_query:
@@ -34,21 +35,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 直近3時間以内にschedule実行済みならスキップ
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          last=$(gh run list --workflow collect-x-posts --event schedule \
+            --status completed --limit 1 --json createdAt -q '.[0].createdAt // ""')
+          if [ -z "$last" ]; then
+            echo "初回schedule実行"; exit 0
+          fi
+          diff=$(( $(date +%s) - $(date -d "$last" +%s) ))
+          echo "前回schedule: $last (${diff}秒前)"
+          if [ "$diff" -lt 9000 ]; then
+            echo "3時間未満のためスキップ"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           python-version: "3.12"
 
       - uses: actions/cache@v4
+        if: steps.guard.outputs.skip != 'true'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
+        if: steps.guard.outputs.skip != 'true'
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
       - name: Setup Cloudflare WARP (residential-like egress)
+        if: steps.guard.outputs.skip != 'true'
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
@@ -61,11 +84,13 @@ jobs:
           curl -s --max-time 15 https://cloudflare.com/cdn-cgi/trace | head -5
 
       - name: Restore X session
+        if: steps.guard.outputs.skip != 'true'
         run: echo "$X_STATE_JSON" > state.json
         env:
           X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
 
       - name: Run collector
+        if: steps.guard.outputs.skip != 'true'
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
@@ -75,7 +100,7 @@ jobs:
         run: xvfb-run -a python collector.py
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.guard.outputs.skip != 'true'
         with:
           name: debug
           path: debug_*.png
