@@ -50,6 +50,16 @@ function ensureSheets_() {
   data.setColumnWidth(4, 300);  // D列 = ポスト文
 }
 
+// No.を振り直す（下=最古が1、上=最新が連番）。行削除後に呼ぶ。
+function renumber_(sheet) {
+  const last = sheet.getLastRow();
+  let n = 0;
+  for (let r = last; r >= 2; r--) {
+    sheet.getRange(r, 1).setValue(++n);
+  }
+  return n;
+}
+
 function ok(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
@@ -121,6 +131,7 @@ function doGet(e) {
         const no = Number(sheet.getRange(r, 1).getValue()) || 0;
         if (no < beforeNo) { sheet.deleteRow(r); deleted++; }
       }
+      if (deleted) renumber_(sheet);
       return ok({ deleted });
     }
 
@@ -134,6 +145,7 @@ function doGet(e) {
         const url = String(sheet.getRange(r, 3).getValue());
         if (ids.some(id => url.includes(id))) { sheet.deleteRow(r); deleted++; }
       }
+      if (deleted) renumber_(sheet);
       return ok({ deleted });
     }
 
@@ -161,7 +173,13 @@ function doGet(e) {
         if (seen[m[1]]) { sheet.deleteRow(r); r--; deleted++; }
         else seen[m[1]] = true;
       }
+      if (deleted) renumber_(sheet);
       return ok({ deleted });
+    }
+
+    // No.を振り直す（下=最古が1、上=最新が連番）: ?action=renumber
+    if (action === "renumber") {
+      return ok({ renumbered: renumber_(ss.getSheetByName(DATA_SHEET)) });
     }
 
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
@@ -226,6 +244,9 @@ function doPost(e) {
           return ok({ saved: false, duplicate: true });
       }
     }
+
+    // 手動削除等で番号が飛んでいても新規保存時に必ず連番へ修正
+    renumber_(sheet);
 
     // 既存No.の最大+1を採番
     const last = sheet.getLastRow();
