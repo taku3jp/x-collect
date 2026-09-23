@@ -95,7 +95,7 @@ jobs:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           MAX_SCROLLS: "300"
-          MAX_SHOTS: "25"
+          MAX_SHOTS: "60"
           HEADFUL: "1"
         run: xvfb-run -a python collector.py
 
