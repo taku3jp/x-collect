@@ -30,7 +30,7 @@ JST = timezone(timedelta(hours=9))
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 TOKEN = os.environ.get("APPS_SCRIPT_TOKEN", "")
 STATE_PATH = os.environ.get("X_STATE_PATH", "state.json")
-MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "50"))
+MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "300"))
 MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "25"))
 SCROLL_PAUSE = 2.0
 DETAIL_PAUSE = 3.0
@@ -234,13 +234,24 @@ def scrape_timeline(page, url, captured, for_you=False):
         except Exception:
             pass
 
+    # XのTLは仮想化リスト（スクロールで上のポストが消える）なので
+    # scrollHeightだけでは判定できない。「高さが伸びない」＋「新規
+    # GraphQLレスポンスが来ない」が続いたら底 or レート制限とみなす。
     last_height = 0
+    stale = 0
     for i in range(MAX_SCROLLS):
+        before = len(captured)
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(int(SCROLL_PAUSE * 1000))
         height = page.evaluate("document.body.scrollHeight")
-        if height == last_height:
-            break
+        if height == last_height and len(captured) == before:
+            stale += 1
+            if stale >= 5:
+                print(f"  {stale}回連続で新規なし → 底/レート制限と判断")
+                break
+            page.wait_for_timeout(2500)  # 追加ロードをもう少し待つ
+        else:
+            stale = 0
         last_height = height
 
     page.remove_listener("response", on_response)
