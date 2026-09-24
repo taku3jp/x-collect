@@ -639,9 +639,10 @@ def main():
     sensitive_only = bool(config.get("sensitiveOnly", True))
     ja_only = bool(config.get("jaOnly", True))
     existing = set(config.get("existingIds") or [])
+    existing |= set(config.get("rejectedIds") or [])
     print(f"対象: {accounts} / 閾値: {threshold} / キーワード: {len(keywords)}件"
           f" / センシティブのみ: {sensitive_only} / 日本語のみ: {ja_only}"
-          f" / 収集済み: {len(existing)}件")
+          f" / 収集済み+判定済み除外: {len(existing)}件")
 
     def kw_match(t):
         return any(k in t["haystack"] for k in keywords)
@@ -739,6 +740,7 @@ def main():
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未収集: {len(candidates)}件")
 
         sent = 0
+        rejected = []
         for t in candidates[:MAX_SHOTS]:
             try:
                 shot = get_tweet_detail(page, t, keywords)
@@ -746,11 +748,15 @@ def main():
                 print(f"  detail error {t['id']}: {e}", file=sys.stderr)
                 shot = None
 
+            # 判定NGはスプシに記録して次回以降チェック対象から外す
+            # （同じ弾かれ候補を毎回チェックし直す無駄を防ぐ）
             if t["impressions"] < threshold:
                 print(f"  skip (詳細で閾値未満): {t['url']}")
+                rejected.append(t["id"])
                 continue
             if not is_target(t, strict=True):
                 print(f"  skip (アフィリンクなし等): {t['url']}")
+                rejected.append(t["id"])
                 continue
 
             # 画像のみポストは中身を解析して漫画/イラストを弾く
@@ -758,6 +764,7 @@ def main():
                 shots = t["photo_urls"][:4]
                 if sum(_image_is_manga(u) for u in shots) * 2 >= len(shots):
                     print(f"  skip (漫画/イラスト画像): {t['url']}")
+                    rejected.append(t["id"])
                     continue
 
             row = {
@@ -784,6 +791,15 @@ def main():
             page.wait_for_timeout(int(DETAIL_PAUSE * 1000))
 
         browser.close()
+
+    # 判定NGのIDをスプシに記録（次回以降スキップ）
+    rejected = [i for i in rejected if i]
+    if rejected:
+        try:
+            call_api(params="action=reject&ids=" + ",".join(rejected))
+            print(f"判定NG {len(rejected)}件を記録")
+        except Exception as e:
+            print(f"reject記録エラー: {e}", file=sys.stderr)
 
     print(f"完了: {sent}件をスプレッドシートに保存")
 

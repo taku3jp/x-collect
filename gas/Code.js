@@ -182,6 +182,22 @@ function doGet(e) {
       return ok({ renumbered: renumber_(ss.getSheetByName(DATA_SHEET)) });
     }
 
+    // 判定NGのstatus idをF列に記録（次回スキップ用）: ?action=reject&ids=1,2
+    if (action === "reject") {
+      const ids = String((e.parameter || {}).ids || "").split(",")
+        .map(s => s.trim()).filter(Boolean);
+      const lastCfg = Math.max(cfg.getLastRow(), 4);
+      const fcol = cfg.getRange(5, 6, lastCfg - 4, 1).getValues()
+        .flat().map(String);
+      let row = 5 + fcol.filter(v => v.trim()).length;
+      if (row > 3005) {  // 3000件上限。超えたら古い分を切り捨てて最初から
+        cfg.getRange(5, 6, lastCfg - 4, 1).clearContent();
+        row = 5;
+      }
+      ids.forEach(id => cfg.getRange(row++, 6).setValue(id));
+      return ok({ added: ids.length });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);
@@ -205,6 +221,10 @@ function doGet(e) {
       ? cfg.getRange(5, 4, lastCfg - 4, 1).getValues()
         .flat().map(String).map(s => s.trim()).filter(Boolean)
       : [];
+    const rejectedIds = lastCfg >= 5
+      ? cfg.getRange(5, 6, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim()).filter(Boolean)
+      : [];
 
     const sheet = ss.getSheetByName(DATA_SHEET);
     const last = Math.min(sheet.getLastRow(), MAX_EXISTING_SCAN + 1);
@@ -216,7 +236,7 @@ function doGet(e) {
         if (m) existingIds.push(m[1]);
       }
     }
-    return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords, existingIds });
+    return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords, existingIds, rejectedIds });
   } catch (err) {
     return ok({ error: String(err) });
   }
