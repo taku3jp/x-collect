@@ -31,7 +31,7 @@ APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 TOKEN = os.environ.get("APPS_SCRIPT_TOKEN", "")
 STATE_PATH = os.environ.get("X_STATE_PATH", "state.json")
 MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "300"))
-MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "120"))
+MAX_SHOTS = int(os.environ.get("MAX_SHOTS", "200"))
 SCROLL_PAUSE = 2.0
 DETAIL_PAUSE = 1.0
 NAV_TIMEOUT = 60_000
@@ -538,21 +538,21 @@ def get_tweet_detail(page, tweet, keywords):
     page.goto(tweet["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
 
-    # 「さらに返信を表示」系の折りたたみを展開（スパム判定返信にアフィリンクが多い）
+    # 「さらに返信を表示」系の折りたたみを展開＋返信欄をスクロール
+    # （ボタンがなくても下にスクロールすると追加返信がロードされる。
+    #   アフィリンク返信は下の方に埋もれてることが多い）
     try:
         for _ in range(2):
-            btns = page.get_by_text(
-                re.compile("返信をさらに表示|Show more replies")).all()
-            if not btns:
-                break
-            for b in btns:
+            for b in page.get_by_text(
+                    re.compile("返信をさらに表示|Show more replies")).all():
                 try:
                     b.click(timeout=1500)
                 except Exception:
                     pass
-            page.wait_for_timeout(1500)
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(1000)
+            page.mouse.wheel(0, 3000)
+            page.wait_for_timeout(1200)
+            page.mouse.wheel(0, 3000)
+            page.wait_for_timeout(1200)
     except Exception:
         pass
 

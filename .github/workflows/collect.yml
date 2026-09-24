@@ -3,7 +3,7 @@ name: collect-x-posts
 on:
   schedule:
     # 毎時23分に起動（GitHubのscheduleは遅延・スキップされるため頻度を上げ、
-    # ワークフロー内で前回から3時間未満ならスキップして実質3時間おきにする）
+    # ワークフロー内で前回から1.5時間未満ならスキップして実質1.5時間おきにする）
     - cron: "23 * * * *"
   workflow_dispatch: # Actionsタブから手動実行も可能
     inputs:
@@ -31,7 +31,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || github.event.inputs.gas_query == '' }}
     concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -48,8 +48,8 @@ jobs:
           fi
           diff=$(( $(date +%s) - $(date -d "$last" +%s) ))
           echo "前回schedule: $last (${diff}秒前)"
-          if [ "$diff" -lt 9000 ]; then
-            echo "3時間未満のためスキップ"
+          if [ "$diff" -lt 5400 ]; then
+            echo "1.5時間未満のためスキップ"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -95,7 +95,7 @@ jobs:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           MAX_SCROLLS: "300"
-          MAX_SHOTS: "120"
+          MAX_SHOTS: "200"
           HEADFUL: "1"
         run: xvfb-run -a python collector.py
 
