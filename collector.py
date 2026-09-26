@@ -365,6 +365,56 @@ def _image_is_manga(url):
         return False
 
 
+def _video_skin_ratio(mp4_url):
+    """mp4をDLして複数フレームの肌色率(YCrCb)を測る。
+    エロ動画は肌が画面の3〜8割、バズネタ動画は2割以下。
+    returns: 最大フレーム肌色率（失敗時は1.0=弾かない）"""
+    try:
+        import tempfile
+        import cv2
+        import numpy as np
+        req = urllib.request.Request(mp4_url, headers={"User-Agent": _RESOLVE_UA})
+        data = urllib.request.urlopen(req, timeout=30).read()
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(data)
+            path = f.name
+        ratios = []
+        cap = cv2.VideoCapture(path)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 60
+        for frac in (0.1, 0.35, 0.6, 0.85):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * frac))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            ycrcb = cv2.cvtColor(cv2.resize(frame, (160, 160)),
+                                 cv2.COLOR_BGR2YCrCb)
+            mask = cv2.inRange(ycrcb, (0, 135, 85), (255, 180, 135))
+            ratios.append(float((mask > 0).mean()))
+        cap.release()
+        os.unlink(path)
+        return max(ratios) if ratios else 1.0
+    except Exception:
+        return 1.0
+
+
+def _photo_skin_ratio(url):
+    """写真の肌色率（RGB簡易判定）。失敗時は1.0=弾かない"""
+    try:
+        import io
+        from PIL import Image
+        u = url + ("&" if "?" in url else "?") + "name=small"
+        req = urllib.request.Request(u, headers={"User-Agent": _RESOLVE_UA})
+        with urllib.request.urlopen(req, timeout=15) as res:
+            img = Image.open(io.BytesIO(res.read())).convert("RGB")
+        img.thumbnail((200, 200))
+        px = list(img.getdata())
+        return sum(1 for r, g, b in px
+                   if r > 95 and g > 40 and b > 20 and r > g > b
+                   and (r - min(g, b)) > 15 and abs(r - g) > 15) / len(px)
+    except Exception:
+        return 1.0
+
+
 def _author_name(tr):
     u = ((tr.get("core") or {}).get("user_results") or {}).get("result") or {}
     return (u.get("legacy") or {}).get("screen_name") or \
@@ -764,6 +814,31 @@ def main():
                 shots = t["photo_urls"][:4]
                 if sum(_image_is_manga(u) for u in shots) * 2 >= len(shots):
                     print(f"  skip (漫画/イラスト画像): {t['url']}")
+                    rejected.append(t["id"])
+                    continue
+
+            # メディアなしは除外（参考例は全件動画/画像付きの釣り文。
+            # テキストのみはスプシの参考画像・動画内容が成立しない）
+            if not t.get("has_video") and not t.get("photo_urls"):
+                print(f"  skip (メディアなし): {t['url']}")
+                rejected.append(t["id"])
+                continue
+
+            # メディアの中身がエロ系か確認
+            # （バズネタ動画にアフィ返信を寄生させるだけの非エロ投稿を弾く。
+            #   エロ動画: 肌色率0.3〜0.8 / ネタ動画: ~0.2以下）
+            mp4s = [u for u in t["media"].split("\n") if ".mp4" in u]
+            if mp4s:
+                skin = _video_skin_ratio(mp4s[0])
+                if skin < 0.28:
+                    print(f"  skip (動画が非エロ系 skin={skin:.2f}): {t['url']}")
+                    rejected.append(t["id"])
+                    continue
+            elif t.get("photo_urls") and not t.get("has_video"):
+                skin = max(_photo_skin_ratio(u)
+                           for u in t["photo_urls"][:4])
+                if skin < 0.18:
+                    print(f"  skip (画像が非エロ系 skin={skin:.2f}): {t['url']}")
                     rejected.append(t["id"])
                     continue
 
