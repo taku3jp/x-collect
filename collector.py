@@ -366,9 +366,9 @@ def _image_is_manga(url):
 
 
 def _video_skin_ratio(mp4_url):
-    """mp4をDLして複数フレームの肌色率(YCrCb)を測る。
+    """mp4をDLして10フレームの肌色率(YCrCb)を測る。
     エロ動画は肌が画面の3〜8割、バズネタ動画は2割以下。
-    returns: 最大フレーム肌色率（失敗時は1.0=弾かない）"""
+    returns: 最大フレーム肌色率（失敗時は-1）"""
     try:
         import tempfile
         import cv2
@@ -381,7 +381,7 @@ def _video_skin_ratio(mp4_url):
         ratios = []
         cap = cv2.VideoCapture(path)
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 60
-        for frac in (0.1, 0.35, 0.6, 0.85):
+        for frac in np.linspace(0.05, 0.95, 10):
             cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * frac))
             ok, frame = cap.read()
             if not ok:
@@ -392,13 +392,13 @@ def _video_skin_ratio(mp4_url):
             ratios.append(float((mask > 0).mean()))
         cap.release()
         os.unlink(path)
-        return max(ratios) if ratios else 1.0
+        return max(ratios) if ratios else -1.0
     except Exception:
-        return 1.0
+        return -1.0
 
 
 def _photo_skin_ratio(url):
-    """写真の肌色率（RGB簡易判定）。失敗時は1.0=弾かない"""
+    """写真の肌色率（RGB簡易判定）。失敗時は-1"""
     try:
         import io
         from PIL import Image
@@ -412,7 +412,71 @@ def _photo_skin_ratio(url):
                    if r > 95 and g > 40 and b > 20 and r > g > b
                    and (r - min(g, b)) > 15 and abs(r - g) > 15) / len(px)
     except Exception:
-        return 1.0
+        return -1.0
+
+
+_AUTHOR_SKIN_CACHE = {}
+
+
+def _author_media_skin(page, user, n=8):
+    """作者のプロフィールTLから直近メディア投稿の肌色率平均を返す。
+    アダアフィ垢は一貫してエロ系を投稿するので平均が高い(~0.3以上)。
+    寄生虫垢はバラエティ動画を貼り回すので低い(~0.15以下)。
+    取得失敗・メディア投稿不足なら -1。"""
+    if user in _AUTHOR_SKIN_CACHE:
+        return _AUTHOR_SKIN_CACHE[user]
+    avg = -1.0
+    try:
+        captured = []
+
+        def on_response(res):
+            if "UserTweets" in res.url or "UserOriginalsTimeline" in res.url:
+                try:
+                    captured.append(res.json())
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+        try:
+            page.goto(f"https://x.com/{user}", timeout=NAV_TIMEOUT,
+                      wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+            for _ in range(3):
+                page.mouse.wheel(0, 3000)
+                page.wait_for_timeout(2000)
+        finally:
+            page.remove_listener("response", on_response)
+        results = []
+        for body in captured:
+            iter_tweet_results(body, results)
+        own = [tr for tr in results if _author_name(tr) == user]
+        skins = []
+        for tr in own:
+            ents = ((tr.get("legacy") or {}).get("extended_entities")
+                    or {}).get("media") or []
+            for m in ents:
+                variants = (m.get("video_info") or {}).get("variants") or []
+                mp4s = [v["url"] for v in variants
+                        if v.get("content_type") == "video/mp4"]
+                if mp4s:
+                    s = _video_skin_ratio(mp4s[-1])
+                    if s >= 0:  # 解析失敗(-1)は除外
+                        skins.append(s)
+                    break
+                u = m.get("media_url_https")
+                if u:
+                    s = _photo_skin_ratio(u)
+                    if s >= 0:
+                        skins.append(s)
+                    break
+            if len(skins) >= n:
+                break
+        if skins:
+            avg = sum(skins) / len(skins)
+    except Exception:
+        pass
+    _AUTHOR_SKIN_CACHE[user] = avg
+    return avg
 
 
 def _author_name(tr):
@@ -826,21 +890,29 @@ def main():
 
             # メディアの中身がエロ系か確認
             # （バズネタ動画にアフィ返信を寄生させるだけの非エロ投稿を弾く。
-            #   エロ動画: 肌色率0.3〜0.8 / ネタ動画: ~0.2以下）
+            #   ポスト単体で肌色率が低くても、作者が一貫してエロ系を
+            #   投稿している垢なら救済する。実測:
+            #   エロ垢のメディア平均 0.31〜0.48 / 寄生垢 0.11〜0.13）
             mp4s = [u for u in t["media"].split("\n") if ".mp4" in u]
             if mp4s:
                 skin = _video_skin_ratio(mp4s[0])
-                if skin < 0.28:
-                    print(f"  skip (動画が非エロ系 skin={skin:.2f}): {t['url']}")
-                    rejected.append(t["id"])
-                    continue
+                if 0 <= skin < 0.30:
+                    auth = _author_media_skin(page, t["user"])
+                    if auth < 0.20:
+                        print(f"  skip (非エロ動画 skin={skin:.2f}"
+                              f" 作者avg={auth:.2f}): {t['url']}")
+                        rejected.append(t["id"])
+                        continue
             elif t.get("photo_urls") and not t.get("has_video"):
-                skin = max(_photo_skin_ratio(u)
-                           for u in t["photo_urls"][:4])
-                if skin < 0.18:
-                    print(f"  skip (画像が非エロ系 skin={skin:.2f}): {t['url']}")
-                    rejected.append(t["id"])
-                    continue
+                pskins = [_photo_skin_ratio(u) for u in t["photo_urls"][:4]]
+                skin = max((s for s in pskins if s >= 0), default=-1.0)
+                if 0 <= skin < 0.18:
+                    auth = _author_media_skin(page, t["user"])
+                    if auth < 0.20:
+                        print(f"  skip (非エロ画像 skin={skin:.2f}"
+                              f" 作者avg={auth:.2f}): {t['url']}")
+                        rejected.append(t["id"])
+                        continue
 
             row = {
                 "date": datetime.now(JST).strftime("%Y/%m/%d %H:%M"),
