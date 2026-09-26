@@ -28,7 +28,7 @@ jobs:
   gas:
     if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.gas_query != '' || github.event.inputs.reimage_id != '' || github.event.inputs.reimage_dir != '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Call Apps Script webhook
