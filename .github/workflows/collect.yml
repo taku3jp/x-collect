@@ -19,10 +19,14 @@ on:
         description: "差し替えるPNGのリポジトリパス（例: tmp/reimage.png）"
         required: false
         default: ""
+      reimage_dir:
+        description: "一括差し替え: {statusId}.png を含むディレクトリ"
+        required: false
+        default: ""
 
 jobs:
   gas:
-    if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.gas_query != '' || github.event.inputs.reimage_id != '') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.gas_query != '' || github.event.inputs.reimage_id != '' || github.event.inputs.reimage_dir != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -61,9 +65,39 @@ jobs:
           req.add_header("Content-Type", "text/plain")
           print(urllib.request.urlopen(req, timeout=120).read().decode()[:500])
           PYEOF
+      - name: Batch reimage rows via webhook
+        if: ${{ github.event.inputs.reimage_dir != '' }}
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          REIMAGE_DIR: ${{ github.event.inputs.reimage_dir }}
+        timeout-minutes: 30
+        run: |
+          python3 - <<PYEOF
+          import base64, json, os, urllib.request, glob
+          files = sorted(glob.glob(os.path.join(os.environ["REIMAGE_DIR"], "*.png")))
+          print(f"{len(files)} files")
+          for f in files:
+              sid = os.path.splitext(os.path.basename(f))[0]
+              body = json.dumps({
+                  "token": os.environ["APPS_SCRIPT_TOKEN"],
+                  "reimageId": sid,
+                  "imageBase64": base64.b64encode(open(f,"rb").read()).decode(),
+              }).encode()
+              for attempt in range(3):
+                  try:
+                      req = urllib.request.Request(
+                          os.environ["APPS_SCRIPT_URL"], data=body, method="POST")
+                      req.add_header("Content-Type", "text/plain")
+                      print(sid, urllib.request.urlopen(req, timeout=180)
+                            .read().decode()[:200], flush=True)
+                      break
+                  except Exception as e:
+                      print(sid, "retry", attempt, e, flush=True)
+          PYEOF
 
   collect:
-    if: ${{ github.event_name == 'schedule' || (github.event.inputs.gas_query == '' && github.event.inputs.reimage_id == '') }}
+    if: ${{ github.event_name == 'schedule' || (github.event.inputs.gas_query == '' && github.event.inputs.reimage_id == '' && github.event.inputs.reimage_dir == '') }}
     concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
     runs-on: ubuntu-latest
     timeout-minutes: 90

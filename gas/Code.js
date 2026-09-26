@@ -48,6 +48,27 @@ function ensureSheets_() {
   }
   data.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
   data.setColumnWidth(4, 300);  // D列 = ポスト文
+  try { installTriggers_(); } catch (e) { /* 権限不足なら無視 */ }
+}
+
+// 手動で行を削除したとき番号を即座に振り直す
+// （onChangeインストール型トリガーから呼ばれる）
+function onSheetChange_(e) {
+  if (e && e.changeType === "REMOVE_ROW") {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet()
+      .getSheetByName(DATA_SHEET);
+    if (sheet) renumber_(sheet);
+  }
+}
+
+function installTriggers_() {
+  const exists = ScriptApp.getProjectTriggers()
+    .some(t => t.getHandlerFunction() === "onSheetChange_");
+  if (!exists) {
+    ScriptApp.newTrigger("onSheetChange_")
+      .forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet())
+      .onChange().create();
+  }
 }
 
 // No.を振り直す（下=最古が1、上=最新が連番）。行削除後に呼ぶ。
@@ -147,6 +168,18 @@ function doGet(e) {
       }
       if (deleted) renumber_(sheet);
       return ok({ deleted });
+    }
+
+    // 画像フォルダ内のファイル一覧（名前=id, サイズ）を返す: ?action=listfiles
+    if (action === "listfiles") {
+      const files = [];
+      const it = getImageFolder_().getFiles();
+      while (it.hasNext()) {
+        const f = it.next();
+        files.push({ id: f.getId(), name: f.getName(),
+                     size: f.getSize() });
+      }
+      return ok({ files });
     }
 
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
@@ -325,6 +358,14 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// 開発用: セル画像の参照URLを確認
+function devProbeCellImage() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DATA_SHEET);
+  const ci = sheet.getRange(2, IMAGE_COL).getCellImage();
+  if (!ci) return "null";
+  return String(ci.getContentUrl());
 }
 
 function getImageFolder_() {
