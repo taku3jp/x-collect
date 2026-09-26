@@ -253,6 +253,26 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(DATA_SHEET);
 
+    // 既存行の画像を差し替え: {"reimageId": "<status id>", "imageBase64": "..."}
+    if (body.reimageId && body.imageBase64) {
+      for (let row = 2; row <= sheet.getLastRow(); row++) {
+        if (!String(sheet.getRange(row, 3).getValue())
+             .includes(body.reimageId)) continue;
+        const blob = Utilities.newBlob(
+          Utilities.base64Decode(body.imageBase64), "image/png",
+          `tweet_re_${body.reimageId}.png`);
+        const file = getImageFolder_().createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK,
+                        DriveApp.Permission.VIEW);
+        const cellImage = SpreadsheetApp.newCellImage()
+          .setSourceUrl(`https://drive.google.com/thumbnail?id=${file.getId()}&sz=w1000`)
+          .build();
+        sheet.getRange(row, IMAGE_COL).setValue(cellImage);
+        return ok({ updated: true, row });
+      }
+      return ok({ updated: false, error: "row not found" });
+    }
+
     // 重複チェック: 同じstatus idの行が既にあれば挿入しない
     // （定期実行と手動実行の並走で二重保存されるのを防ぐ）
     const idm = String(r.url || "").match(/status\/(\d+)/);

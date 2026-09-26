@@ -11,14 +11,24 @@ on:
         description: "Webhookクエリ（例: action=delete&ids=123,456 / action=list）"
         required: false
         default: ""
+      reimage_id:
+        description: "画像を差し替える行のstatus id"
+        required: false
+        default: ""
+      reimage_path:
+        description: "差し替えるPNGのリポジトリパス（例: tmp/reimage.png）"
+        required: false
+        default: ""
 
 jobs:
   gas:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.gas_query != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.gas_query != '' || github.event.inputs.reimage_id != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Call Apps Script webhook
+        if: ${{ github.event.inputs.gas_query != '' }}
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
@@ -26,9 +36,34 @@ jobs:
         run: |
           resp=$(curl -sfL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&$QUERY")
           echo "$resp"
+      - name: Reimage row via webhook
+        if: ${{ github.event.inputs.reimage_id != '' }}
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REIMAGE_ID: ${{ github.event.inputs.reimage_id }}
+          REIMAGE_PATH: ${{ github.event.inputs.reimage_path }}
+        run: |
+          curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/$REIMAGE_PATH" \
+            -o /tmp/reimage.png
+          python3 - <<PYEOF
+          import base64, json, os, urllib.request
+          body = json.dumps({
+              "token": os.environ["APPS_SCRIPT_TOKEN"],
+              "reimageId": os.environ["REIMAGE_ID"],
+              "imageBase64": base64.b64encode(open("/tmp/reimage.png","rb").read()).decode(),
+          }).encode()
+          req = urllib.request.Request(os.environ["APPS_SCRIPT_URL"],
+              data=body, method="POST")
+          req.add_header("Content-Type", "text/plain")
+          print(urllib.request.urlopen(req, timeout=120).read().decode()[:500])
+          PYEOF
 
   collect:
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.gas_query == '' }}
+    if: ${{ github.event_name == 'schedule' || (github.event.inputs.gas_query == '' && github.event.inputs.reimage_id == '') }}
     concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
     runs-on: ubuntu-latest
     timeout-minutes: 90
