@@ -705,20 +705,52 @@ def get_tweet_detail(page, tweet, keywords):
         tweet["commercial"] = True
 
     shot = None
-    article = page.locator('article[data-testid="tweet"]').first
     try:
-        # センシティブメディアの「表示」ボタンを自動クリック
-        for btn in page.get_by_role("button", name=re.compile("表示|View")).all():
+        # 返信展開で下にスクロールしたので先頭に戻す
+        # （仮想化リストで対象記事がアンマウントされるのを防ぐ）
+        page.mouse.wheel(0, -100000)
+        page.wait_for_timeout(1500)
+
+        # DOM順の先頭ではなく、対象ポストIDのパーマリンクを含む記事を特定
+        # （返信・広告・引用を撮り間違えないため）
+        article = page.locator(
+            f'article[data-testid="tweet"]:has(a[href$="/{tweet["id"]}"])'
+        ).first
+        if not article.count():
+            article = page.locator('article[data-testid="tweet"]').first
+
+        # センシティブメディアの「表示」ボタンを対象記事内でクリック
+        for btn in article.get_by_role(
+                "button", name=re.compile("表示|View")).all():
             try:
                 btn.click(timeout=800)
             except Exception:
                 pass
-        article.scroll_into_view_if_needed(timeout=10_000)
+        # 記事の先頭がviewport上端に来るようにスクロール
+        # （部分描画・仮想化で上部が欠けるのを防ぐ）
+        try:
+            article.evaluate(
+                "el => el.scrollIntoView({block: 'start'})")
+        except Exception:
+            article.scroll_into_view_if_needed(timeout=10_000)
         try:
             page.wait_for_load_state("networkidle", timeout=8_000)
         except Exception:
             pass
-        page.wait_for_timeout(1000)
+        # メディア（img/video）が実際に読み込まれるまで待機
+        try:
+            article.locator("img, video").first.wait_for(
+                state="visible", timeout=10_000)
+            page.wait_for_function(
+                """el => {
+                    const imgs = el.querySelectorAll('img');
+                    return imgs.length === 0 ||
+                        [...imgs].every(i => i.naturalWidth > 0);
+                }""",
+                arg=article.element_handle(), timeout=10_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
         shot = article.screenshot(timeout=15_000)
     except Exception as e:
         print(f"  screenshot failed for {tweet['id']}: {e}", file=sys.stderr)
