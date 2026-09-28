@@ -112,21 +112,34 @@ def main():
             locale="ja-JP", timezone_id="Asia/Tokyo")
         page = ctx.new_page()
 
+        consec_fail = 0
+        unavailable = 0
         for i, row in enumerate(rows):
             url = row.get("url") or ""
             m = re.search(r"/status/(\d+)", url)
             if not m:
                 continue
             tid = m.group(1)
-            try:
-                _user, did, results = _fetch_status_thread(page, url)
-            except Exception as e:
-                print(f"  [{i+1}/{len(rows)}] {url} fetch error: {e}",
-                      file=sys.stderr)
-                continue
+            results = []
+            for attempt in range(3):
+                try:
+                    _user, did, results = _fetch_status_thread(page, url)
+                except Exception as e:
+                    print(f"  [{i+1}/{len(rows)}] {url} fetch error: {e}",
+                          file=sys.stderr)
+                if results:
+                    break
+                # X側のレート制限等の一時失敗を想定して待って再試行
+                page.wait_for_timeout(5000 * (attempt + 1))
             if not results:
+                unavailable += 1
+                consec_fail += 1
                 print(f"  [{i+1}/{len(rows)}] {url} 詳細取得できず（削除済み?）")
+                if consec_fail >= 15:
+                    print("連続して詳細取得に失敗。中断します（再実行してください）")
+                    break
                 continue
+            consec_fail = 0
             try:
                 hit = _thread_hits_target(page, results, did)
             except Exception as e:
@@ -136,10 +149,10 @@ def main():
             if hit:
                 hit_ids.append(tid)
                 print(f"  [{i+1}/{len(rows)}] HIT No.{row.get('no')} {url}")
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(1500)
         browser.close()
 
-    print(f"マッチ: {len(hit_ids)}件 {hit_ids}")
+    print(f"マッチ: {len(hit_ids)}件 {hit_ids} / 詳細取得不可: {unavailable}件")
     if hit_ids and not DRY_RUN:
         r1 = call_api(params="action=delete&ids=" + ",".join(hit_ids))
         print(f"削除: {r1}")
