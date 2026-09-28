@@ -24,7 +24,7 @@ GitHub Actions (3時間おき / 無料)
 ### 1. Apps Scriptのデプロイ
 
 **自動（実施済みの経路）:** `clasp`でプロジェクト作成・push・デプロイ済み。
-初回 `GET .../exec?action=bootstrap` でTOKEN自動生成 + 「設定」「X収集テスト」
+初回 `GET .../exec?action=bootstrap` でTOKEN自動生成 + 「設定」「X収集」
 タブの自動作成が行われる。`gas/` 配下がデプロイ済みコード（`apps_script/Code.gs`
 と同じ内容）。
 

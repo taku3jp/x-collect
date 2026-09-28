@@ -1,13 +1,14 @@
 /**
  * X収集 webhook for Google Sheets.
  * Bound to the spreadsheet. Tabs:
- *   「X収集テスト」 … collected rows (newest on top)
+ *   「X収集」      … collected rows (newest on top)
+ *   「実際伸びた投稿」 … own-account posts over threshold (newest on top)
  *   「設定」        … B1=ON/OFF, B2=impression threshold, A5+=account IDs
  *
  * 初回は doGet?action=bootstrap でTOKEN自動生成+タブ自動作成される。
  */
 
-const DATA_SHEET = "X収集テスト";
+const DATA_SHEET = "X収集";
 const GROWTH_SHEET = "実際伸びた投稿";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
@@ -172,6 +173,42 @@ function doGet(e) {
         list.forEach((a, i) => cfg.getRange(5 + i, 8).setValue(a));
       }
       return ok({ saved: true });
+    }
+
+    // 「X収集テスト」(旧タブ名で自動再作成されたシート) の行を
+    // 「X収集」へ移行して旧シートを削除: ?action=migratesheet
+    if (action === "migratesheet") {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try {
+        const src = ss.getSheetByName("X収集テスト");
+        const dst = ss.getSheetByName(DATA_SHEET);
+        if (!src) return ok({ error: "移行元シートなし" });
+        const existing = new Set();
+        const dlast = dst.getLastRow();
+        if (dlast >= 2) {
+          for (const u of dst.getRange(2, 3, dlast - 1, 1).getValues().flat()) {
+            const m = String(u).match(/\/status\/(\d+)/);
+            if (m) existing.add(m[1]);
+          }
+        }
+        let moved = 0, skipped = 0;
+        for (let r = src.getLastRow(); r >= 2; r--) {
+          const url = String(src.getRange(r, 3).getValue());
+          const m = url.match(/\/status\/(\d+)/);
+          if (m && existing.has(m[1])) { skipped++; continue; }
+          dst.insertRowBefore(2);
+          dst.setRowHeight(2, IMAGE_ROW_HEIGHT);
+          src.getRange(r, 1, 1, 11)
+            .copyTo(dst.getRange(2, 1, 1, 11), { contentsOnly: false });
+          moved++;
+        }
+        if (moved) renumber_(dst);
+        ss.deleteSheet(src);
+        return ok({ moved, skipped, deleted: true });
+      } finally {
+        lock.releaseLock();
+      }
     }
 
     // 指定No.未満の行を削除: ?action=purge&beforeNo=255
