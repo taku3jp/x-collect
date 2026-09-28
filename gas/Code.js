@@ -8,12 +8,16 @@
  */
 
 const DATA_SHEET = "X収集テスト";
+const GROWTH_SHEET = "実際伸びた投稿";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
 const IMAGE_COL = 6;        // F列 = 動画内容
 const IMAGE_ROW_HEIGHT = 600;
 const IMAGE_COL_WIDTH = 560;
 const MAX_EXISTING_SCAN = 3000;
+
+const HEADER = ["No.", "日付", "参考リンク", "ポスト文", "素材リンク",
+                "動画内容", "参考画像", "インプ", "いいね", "リポスト", "保存数"];
 
 function getToken_() {
   return PropertiesService.getScriptProperties().getProperty("TOKEN") || "";
@@ -37,17 +41,32 @@ function ensureSheets_() {
     cfg.getRange("D4").setValue("対象キーワード/ドメイン（1行1件・空なら無フィルタ）");
   }
 
+  // 自アカ監視の設定（既存シートへ後追い追加するため個別に初期化）
+  if (!cfg.getRange("C2").getValue()) {
+    cfg.getRange("C2").setValue("自アカ監視ON/OFF");
+    cfg.getRange("D2").setValue("ON");
+    cfg.getRange("C3").setValue("自アカインプ閾値");
+    cfg.getRange("D3").setValue(100000);
+    cfg.getRange("H4").setValue("監視アカウント（自アカ・@なし・1行1件）");
+  }
+
   let data = ss.getSheetByName(DATA_SHEET);
   if (!data) data = ss.insertSheet(DATA_SHEET, 0);
   if (!data.getRange("A1").getValue()) {
-    data.getRange(1, 1, 1, 11).setValues([[
-      "No.", "日付", "参考リンク", "ポスト文", "素材リンク",
-      "動画内容", "参考画像", "インプ", "いいね", "リポスト", "保存数"
-    ]]);
+    data.getRange(1, 1, 1, 11).setValues([HEADER]);
     data.setFrozenRows(1);
   }
   data.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
   data.setColumnWidth(4, 300);  // D列 = ポスト文
+
+  let growth = ss.getSheetByName(GROWTH_SHEET);
+  if (!growth) growth = ss.insertSheet(GROWTH_SHEET);
+  if (!growth.getRange("A1").getValue()) {
+    growth.getRange(1, 1, 1, 11).setValues([HEADER]);
+    growth.setFrozenRows(1);
+  }
+  growth.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+  growth.setColumnWidth(4, 300);
   try { installTriggers_(); } catch (e) { /* 権限不足なら無視 */ }
 }
 
@@ -55,9 +74,11 @@ function ensureSheets_() {
 // （onChangeインストール型トリガーから呼ばれる）
 function onSheetChange_(e) {
   if (e && e.changeType === "REMOVE_ROW") {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet()
-      .getSheetByName(DATA_SHEET);
-    if (sheet) renumber_(sheet);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    for (const name of [DATA_SHEET, GROWTH_SHEET]) {
+      const sheet = ss.getSheetByName(name);
+      if (sheet) renumber_(sheet);
+    }
   }
 }
 
@@ -140,6 +161,16 @@ function doGet(e) {
         const list = String(p.keywords).split(",").map(s => s.trim()).filter(Boolean);
         list.forEach((k, i) => cfg.getRange(5 + i, 4).setValue(k));
       }
+      if (p.growthEnabled !== undefined && p.growthEnabled !== "")
+        cfg.getRange("D2").setValue(String(p.growthEnabled).toUpperCase() === "OFF" ? "OFF" : "ON");
+      if (p.growthThreshold !== undefined && p.growthThreshold !== "")
+        cfg.getRange("D3").setValue(Number(p.growthThreshold));
+      if (p.growthAccounts !== undefined) {
+        const last = Math.max(cfg.getLastRow(), 5);
+        cfg.getRange(5, 8, last - 4, 1).clearContent();
+        const list = String(p.growthAccounts).split(",").map(s => s.trim().replace(/^@/, "")).filter(Boolean);
+        list.forEach((a, i) => cfg.getRange(5 + i, 8).setValue(a));
+      }
       return ok({ saved: true });
     }
 
@@ -157,10 +188,12 @@ function doGet(e) {
     }
 
     // 指定status idを含むURLの行を削除: ?action=delete&ids=123,456
+    // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "delete") {
       const ids = String((e.parameter || {}).ids || "").split(",")
         .map(s => s.trim()).filter(Boolean);
-      const sheet = ss.getSheetByName(DATA_SHEET);
+      const sheet = ss.getSheetByName(
+        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
       let deleted = 0;
       for (let r = sheet.getLastRow(); r >= 2; r--) {
         const url = String(sheet.getRange(r, 3).getValue());
@@ -183,8 +216,10 @@ function doGet(e) {
     }
 
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
+    // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {
-      const sheet = ss.getSheetByName(DATA_SHEET);
+      const sheet = ss.getSheetByName(
+        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
       const rows = [];
       for (let r = 2; r <= sheet.getLastRow(); r++) {
         rows.push({ no: sheet.getRange(r, 1).getValue(),
@@ -197,7 +232,8 @@ function doGet(e) {
 
     // 同一status idの重複行を削除（上=新しい行を残す）: ?action=dedupe
     if (action === "dedupe") {
-      const sheet = ss.getSheetByName(DATA_SHEET);
+      const sheet = ss.getSheetByName(
+        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
       const seen = {};
       let deleted = 0;
       for (let r = 2; r <= sheet.getLastRow(); r++) {
@@ -269,7 +305,29 @@ function doGet(e) {
         if (m) existingIds.push(m[1]);
       }
     }
-    return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords, existingIds, rejectedIds });
+
+    // 自アカ監視用の設定と記録済みID
+    const growthEnabled = String(cfg.getRange("D2").getValue()).toUpperCase() !== "OFF";
+    const growthThreshold = Number(cfg.getRange("D3").getValue()) || 100000;
+    const growthAccounts = lastCfg >= 5
+      ? cfg.getRange(5, 8, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim().replace(/^@/, "")).filter(Boolean)
+      : [];
+    const gsheet = ss.getSheetByName(GROWTH_SHEET);
+    const glast = Math.min(gsheet.getLastRow(), MAX_EXISTING_SCAN + 1);
+    const growthExistingIds = [];
+    if (glast >= 2) {
+      const urls = gsheet.getRange(2, 3, glast - 1, 1).getValues().flat();
+      for (const u of urls) {
+        const m = String(u).match(/\/status\/(\d+)/);
+        if (m) growthExistingIds.push(m[1]);
+      }
+    }
+    return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords,
+                existingIds, rejectedIds,
+                growth: { enabled: growthEnabled, threshold: growthThreshold,
+                          accounts: growthAccounts,
+                          existingIds: growthExistingIds } });
   } catch (err) {
     return ok({ error: String(err) });
   }
@@ -284,7 +342,9 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     const r = body.row || {};
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(DATA_SHEET);
+    // {"target": "growth"} → 「実際伸びた投稿」タブ、それ以外は収集タブ
+    const sheet = ss.getSheetByName(
+      body.target === "growth" ? GROWTH_SHEET : DATA_SHEET);
 
     // 既存行の画像を差し替え: {"reimageId": "<status id>", "imageBase64": "..."}
     if (body.reimageId && body.imageBase64) {
@@ -389,6 +449,39 @@ function devDeleteByStatusIds(ids) {
     rows.push(sheet.getRange(r, 1).getValue() + "\t" + sheet.getRange(r, 3).getValue());
   }
   return JSON.stringify({ deleted, remaining: rows });
+}
+
+// 開発用: clasp run devBootstrapGrowth でgrowthタブ/設定を初期化して確認
+function devBootstrapGrowth() {
+  ensureSheets_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cfg = ss.getSheetByName(CONFIG_SHEET);
+  return JSON.stringify({
+    sheets: ss.getSheets().map(s => s.getName()),
+    growthEnabled: cfg.getRange("D2").getValue(),
+    growthThreshold: cfg.getRange("D3").getValue(),
+  });
+}
+
+// 開発用: growthタブへの書き込み〜削除の往復テスト
+function devGrowthRoundTrip() {
+  const fake = {
+    postData: { contents: JSON.stringify({
+      token: getToken_(), target: "growth",
+      row: { date: "dev", url: "https://x.com/i/status/0",
+             text: "roundtrip test", media: "", impressions: 0,
+             likes: 0, reposts: 0, bookmarks: 0 } }) },
+    parameter: {},
+  };
+  const post = doPost(fake).getContent();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet()
+    .getSheetByName(GROWTH_SHEET);
+  for (let r = sheet.getLastRow(); r >= 2; r--) {
+    if (String(sheet.getRange(r, 3).getValue()).includes("/status/0"))
+      sheet.deleteRow(r);
+  }
+  renumber_(sheet);
+  return post;
 }
 
 function devPing() {
