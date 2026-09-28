@@ -31,6 +31,7 @@ SHEET_URL = os.environ.get(
     "https://docs.google.com/spreadsheets/d/"
     "1Hu4lhEesRQOJPB_puNHfYHerNSWdso3_LFC8uNGeJgs/edit#gid=832401486")
 GROWTH_MAX_SCROLLS = int(os.environ.get("GROWTH_MAX_SCROLLS", "40"))
+MAX_AGE_DAYS = int(os.environ.get("GROWTH_MAX_AGE_DAYS", "30"))
 MAX_POSTS_PER_RUN = int(os.environ.get("GROWTH_MAX_POSTS", "30"))
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 NAV_TIMEOUT = 60_000
@@ -58,13 +59,28 @@ def scrape_profile(page, account, captured):
 
     # 直近ポストが閾値を超えるまで伸び続けるので毎回再スキャンする。
     # 高さが伸びず新規レスポンスも来ない状態が続いたら底とみなす。
+    # 30日より古いポストまで潜ったら打ち切り（閾値超過はほぼ起きないため）
     last_height = 0
     stale = 0
+    cutoff_ts = datetime.now().timestamp() - MAX_AGE_DAYS * 86400
     for i in range(GROWTH_MAX_SCROLLS):
         before = len(captured)
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(2000)
         height = page.evaluate("document.body.scrollHeight")
+
+        # 取得済みツイートの最古日時が閾値より古ければ打ち切り
+        oldest = None
+        for body in captured:
+            results = []
+            iter_tweet_results(body, results)
+            for tr in results:
+                t = parse_tweet(tr)
+                if t["sort_key"] and (oldest is None or t["sort_key"] < oldest):
+                    oldest = t["sort_key"]
+        if oldest and oldest < cutoff_ts:
+            break
+
         if height == last_height and len(captured) == before:
             stale += 1
             if stale >= 4:

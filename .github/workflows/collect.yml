@@ -158,19 +158,8 @@ jobs:
         env:
           X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
 
-      - name: Track own-account growth posts
-        if: steps.guard.outputs.skip != 'true'
-        env:
-          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
-          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GROWTH_MAX_SCROLLS: "40"
-          HEADFUL: "1"
-        run: xvfb-run -a python growth_tracker.py
-
       - name: Run collector
-        # growth_tracker失敗で本収集がスキップされないよう明示的に実行
-        if: ${{ !cancelled() && steps.guard.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true'
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}

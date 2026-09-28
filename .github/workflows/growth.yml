@@ -1,0 +1,65 @@
+name: track-growth-posts
+
+on:
+  schedule:
+    # 3時間おき（GitHubのscheduleは遅延・スキップされうる）
+    - cron: "47 */3 * * *"
+  workflow_dispatch:
+
+jobs:
+  growth:
+    concurrency: growth
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Setup Cloudflare WARP (residential-like egress)
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+          sleep 5
+          warp-cli --accept-tos status || true
+          curl -s --max-time 15 https://cloudflare.com/cdn-cgi/trace | head -5
+
+      - name: Restore X session
+        run: echo "$X_STATE_JSON" > state.json
+        env:
+          X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
+
+      - name: Track own-account growth posts
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GROWTH_MAX_SCROLLS: "40"
+          GROWTH_MAX_AGE_DAYS: "30"
+          GROWTH_MAX_POSTS: "30"
+          HEADFUL: "1"
+        run: xvfb-run -a python growth_tracker.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: growth-debug
+          path: debug_*.png
+          if-no-files-found: ignore
+          retention-days: 7
