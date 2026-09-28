@@ -51,6 +51,11 @@ BLOCKED_DOMAINS = ("fanza", "dmm.co.jp", "dmm.com", "mgstage", "sokmil",
 FANCLUB_DOMAINS = ("myfans", "fantia", "onlyfans", "fansly", "fanvue",
                    "candfans", "fc2", "stripchat", "chaturbate", "xfans")
 
+# 除外する誘導先（パス込み指定）。URL・リダイレクトチェイン・リンク集HTMLに
+# 含まれたらその投稿は収集しない。growth_trackerでは無効化して使う
+BLOCKED_TARGETS = ("myfans.jp/jukiya_erotame",)
+BLOCK_TARGETS_ENABLED = True
+
 # 遷移先を確認する短縮・誘導・リンク集ドメイン（URL自体は着地とみなさない）
 REDIRECT_HOSTS = (
     "x.gd", "is.gd", "v.gd", "bit.ly", "cutt.ly", "tinyurl.", "t.ly",
@@ -294,9 +299,11 @@ def _resolve_chain(url, max_hops=4):
 def _aff_url_level(url, keywords, resolve=True):
     """URLの同人アフィ証拠強度:
     2=ファンクラブ系に着地確認 / 1=キーワードドメイン一致（着地未確認）/
-    0=非証拠 / -1=除外ドメイン（商業AV・漫画系）着地"""
+    0=非証拠 / -1=除外ドメイン（商業AV・漫画系・除外対象チャンネル）着地"""
     lu = url.lower()
     if any(d in lu for d in BLOCKED_DOMAINS):
+        return -1
+    if BLOCK_TARGETS_ENABLED and any(t in lu for t in BLOCKED_TARGETS):
         return -1
     if any(d in lu for d in FANCLUB_DOMAINS):
         return 2
@@ -312,6 +319,8 @@ def _aff_url_level(url, keywords, resolve=True):
             return 1 if any(k in lu for k in keywords) else 0
         chain = " ".join(hops + [final]).lower() + " " + html
         if any(d in chain for d in BLOCKED_DOMAINS):
+            return -1
+        if BLOCK_TARGETS_ENABLED and any(t in chain for t in BLOCKED_TARGETS):
             return -1
         if any(d in chain for d in FANCLUB_DOMAINS):
             return 2
@@ -494,16 +503,9 @@ def _post_urls(lg):
     return urls
 
 
-def _reply_scan(all_results, tweet_id, user, keywords):
-    """会話スレッド内のポストを走査（直接返信だけでなくネストも含む）
-    returns: (キーワードURL返信あり, 本人外部リンク返信あり,
-              他人リングURL一覧, 本人リングURL一覧, 本人の商業AVリンクあり)"""
-    kw_reply = self_link = author_blocked = False
-    ring_urls = []
-    self_ring = []
-    budget = [8]  # 短縮URLの遷移先解決は最大8回/走査
-
-    # 会話メンバーに限定（レスポンス内のおすすめ・広告など無関係ポストを除外）
+def _conversation_ids(all_results, tweet_id):
+    """会話メンバーのstatus id集合（祖先＋focalへの推移的返信）。
+    レスポンス内のおすすめ・広告など無関係ポストを除外するために使う。"""
     by_id = {tr.get("rest_id"): tr for tr in all_results}
     conv = {tweet_id}
     cur = by_id.get(tweet_id)
@@ -523,6 +525,18 @@ def _reply_scan(all_results, tweet_id, user, keywords):
                 if pid in conv:
                     conv.add(rid)
                     changed = True
+    return conv
+
+
+def _reply_scan(all_results, tweet_id, user, keywords):
+    """会話スレッド内のポストを走査（直接返信だけでなくネストも含む）
+    returns: (キーワードURL返信あり, 本人外部リンク返信あり,
+              他人リングURL一覧, 本人リングURL一覧, 本人の商業AVリンクあり)"""
+    kw_reply = self_link = author_blocked = False
+    ring_urls = []
+    self_ring = []
+    budget = [8]  # 短縮URLの遷移先解決は最大8回/走査
+    conv = _conversation_ids(all_results, tweet_id)
 
     for tr in all_results:
         lg = tr.get("legacy") or {}
@@ -604,7 +618,10 @@ def _thread_has_commercial(results, author=None):
         if author and _author_name(tr) != author:
             continue
         for u in _post_urls(tr.get("legacy") or {}):
-            if any(d in u.lower() for d in BLOCKED_DOMAINS):
+            lu = u.lower()
+            if any(d in lu for d in BLOCKED_DOMAINS):
+                return True
+            if BLOCK_TARGETS_ENABLED and any(t in lu for t in BLOCKED_TARGETS):
                 return True
             host = urllib.parse.urlparse(u).netloc.lower()
             if budget[0] > 0 and any(h in host for h in REDIRECT_HOSTS):
@@ -612,6 +629,9 @@ def _thread_has_commercial(results, author=None):
                 hops, final, html, _ = _resolve_chain(u)
                 chain = " ".join(hops + [final]).lower() + " " + html
                 if any(d in chain for d in BLOCKED_DOMAINS):
+                    return True
+                if BLOCK_TARGETS_ENABLED and \
+                        any(t in chain for t in BLOCKED_TARGETS):
                     return True
     return False
 

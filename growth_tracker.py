@@ -24,6 +24,10 @@ from playwright.sync_api import sync_playwright
 import collector
 from collector import call_api, iter_tweet_results, parse_tweet
 
+# X収集向けの「除外誘導先」フィルタは自アカ監視には適用しない
+# （自分の投稿がそのチャンネルへ誘導している場合も記録したいため）
+collector.BLOCK_TARGETS_ENABLED = False
+
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 SHEET_URL = os.environ.get(
     "GROWTH_SHEET_URL",
