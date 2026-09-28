@@ -304,6 +304,22 @@ function doGet(e) {
       return ok({ added: ids.length });
     }
 
+    // growth側の判定NG status idをJ列に記録: ?action=rejectgrowth&ids=1,2
+    if (action === "rejectgrowth") {
+      const ids = String((e.parameter || {}).ids || "").split(",")
+        .map(s => s.trim()).filter(Boolean);
+      const lastCfg = Math.max(cfg.getLastRow(), 4);
+      const jcol = cfg.getRange(5, 10, lastCfg - 4, 1).getValues()
+        .flat().map(String);
+      let row = 5 + jcol.filter(v => v.trim()).length;
+      if (row > 3005) {
+        cfg.getRange(5, 10, lastCfg - 4, 1).clearContent();
+        row = 5;
+      }
+      ids.forEach(id => cfg.getRange(row++, 10).setValue(id));
+      return ok({ added: ids.length });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);
@@ -350,6 +366,10 @@ function doGet(e) {
       ? cfg.getRange(5, 8, lastCfg - 4, 1).getValues()
         .flat().map(String).map(s => s.trim().replace(/^@/, "")).filter(Boolean)
       : [];
+    const growthRejectedIds = lastCfg >= 5
+      ? cfg.getRange(5, 10, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim()).filter(Boolean)
+      : [];
     const gsheet = ss.getSheetByName(GROWTH_SHEET);
     const glast = Math.min(gsheet.getLastRow(), MAX_EXISTING_SCAN + 1);
     const growthExistingIds = [];
@@ -364,7 +384,8 @@ function doGet(e) {
                 existingIds, rejectedIds,
                 growth: { enabled: growthEnabled, threshold: growthThreshold,
                           accounts: growthAccounts,
-                          existingIds: growthExistingIds } });
+                          existingIds: growthExistingIds,
+                          rejectedIds: growthRejectedIds } });
   } catch (err) {
     return ok({ error: String(err) });
   }

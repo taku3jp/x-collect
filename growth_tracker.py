@@ -15,7 +15,6 @@ DRY_RUN=1 でシート・Slackへの投稿をスキップして候補を表示�
 import base64
 import json
 import os
-import re
 import sys
 import urllib.request
 from datetime import datetime
@@ -94,45 +93,6 @@ def scrape_profile(page, account, captured):
     print(f"  @{account}: scrolls={i+1} captured={len(captured)}")
 
 
-def take_screenshot(page, tweet):
-    """Open the permalink and screenshot the target article only."""
-    page.goto(tweet["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
-    article = page.locator(
-        f'article[data-testid="tweet"]:has(a[href$="/{tweet["id"]}"])'
-    ).first
-    if not article.count():
-        article = page.locator('article[data-testid="tweet"]').first
-    for btn in article.get_by_role(
-            "button", name=re.compile("表示|View")).all():
-        try:
-            btn.click(timeout=800)
-        except Exception:
-            pass
-    try:
-        article.evaluate("el => el.scrollIntoView({block: 'start'})")
-    except Exception:
-        article.scroll_into_view_if_needed(timeout=10_000)
-    try:
-        page.wait_for_load_state("networkidle", timeout=8_000)
-    except Exception:
-        pass
-    try:
-        article.locator("img, video").first.wait_for(
-            state="visible", timeout=10_000)
-        page.wait_for_function(
-            """el => {
-                const imgs = el.querySelectorAll('img');
-                return imgs.length === 0 ||
-                    [...imgs].every(i => i.naturalWidth > 0);
-            }""",
-            arg=article.element_handle(), timeout=10_000)
-    except Exception:
-        pass
-    page.wait_for_timeout(500)
-    return article.screenshot(timeout=15_000)
-
-
 def notify_slack(tweet, no):
     if not SLACK_WEBHOOK_URL:
         print("  SLACK_WEBHOOK_URL 未設定 → Slack通知スキップ")
@@ -166,8 +126,10 @@ def main():
     threshold = int(growth.get("threshold") or 100000)
     accounts = growth.get("accounts") or []
     existing = set(growth.get("existingIds") or [])
+    existing |= set(growth.get("rejectedIds") or [])
+    keywords = [str(k).lower() for k in (config.get("keywords") or [])]
     print(f"監視対象: {accounts} / インプ閾値: {threshold:,}"
-          f" / 記録済み: {len(existing)}件")
+          f" / 記録済み+判定済み除外: {len(existing)}件")
 
     if not accounts:
         print("監視アカウント未指定（設定タブH5以降に@なしIDを入力）")
@@ -214,6 +176,7 @@ def main():
         print(f"発見: {len(tweets)}件 / 閾値以上かつ未記録: {len(candidates)}件")
 
         sent = 0
+        rejected = []
         for t in candidates[:MAX_POSTS_PER_RUN]:
             if DRY_RUN:
                 print(f"  [DRY_RUN] {t['url']} imp={t['impressions']:,}"
@@ -221,9 +184,26 @@ def main():
                 continue
             shot = None
             try:
-                shot = take_screenshot(page, t)
+                # 詳細ページを開いてアフィリンク判定+スクショ
+                # （collectorと同じ基準: 本文or返信欄にファンクラブ系URL着地、
+                #   商業AV着地は除外）
+                shot = collector.get_tweet_detail(page, t, keywords)
             except Exception as e:
-                print(f"  screenshot failed {t['id']}: {e}", file=sys.stderr)
+                print(f"  detail error {t['id']}: {e}", file=sys.stderr)
+
+            if t["impressions"] < threshold:
+                print(f"  skip (詳細で閾値未満): {t['url']}")
+                rejected.append(t["id"])
+                continue
+            if t.get("commercial"):
+                print(f"  skip (商業AVリンク): {t['url']}")
+                rejected.append(t["id"])
+                continue
+            if not (t.get("reply_link") or t.get("self_reply_link")
+                    or t.get("own_link_ok")):
+                print(f"  skip (アフィリンクなし): {t['url']}")
+                rejected.append(t["id"])
+                continue
 
             row = {
                 "date": t["date"] or datetime.now(collector.JST)
@@ -255,6 +235,15 @@ def main():
             page.wait_for_timeout(1000)
 
         browser.close()
+
+    # アフィ判定NGのIDを記録（毎回詳細チェックし直す無駄を防ぐ）
+    rejected = [i for i in rejected if i]
+    if rejected and not DRY_RUN:
+        try:
+            call_api(params="action=rejectgrowth&ids=" + ",".join(rejected))
+            print(f"判定NG {len(rejected)}件を記録")
+        except Exception as e:
+            print(f"reject記録エラー: {e}", file=sys.stderr)
 
     print(f"完了: {sent}件を「実際伸びた投稿」タブに保存"
           + ("（DRY_RUN）" if DRY_RUN else ""))
