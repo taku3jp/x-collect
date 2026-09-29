@@ -1,0 +1,31 @@
+name: ops
+
+# Apps Script webhookに任意のactionを叩く管理用ワークフロー（手動実行のみ）。
+# 例: params="action=list&sheet=growth" / "action=setconfig&growthAccounts=a,b,c"
+on:
+  workflow_dispatch:
+    inputs:
+      params:
+        description: "webhookに渡すクエリ（例: action=list&sheet=growth）"
+        required: true
+
+jobs:
+  ops:
+    concurrency: ops
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call Apps Script webhook
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          PARAMS: ${{ inputs.params }}
+        run: |
+          curl -sL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&$PARAMS" \
+            | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          s=json.dumps(d,ensure_ascii=False)
+          print(s[:8000])
+          if len(s)>8000: print(f'... (+{len(s)-8000} chars truncated)')
+          "
