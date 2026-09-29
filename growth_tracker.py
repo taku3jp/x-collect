@@ -36,6 +36,8 @@ SHEET_URL = os.environ.get(
 GROWTH_MAX_SCROLLS = int(os.environ.get("GROWTH_MAX_SCROLLS", "40"))
 MAX_AGE_DAYS = int(os.environ.get("GROWTH_MAX_AGE_DAYS", "30"))
 MAX_POSTS_PER_RUN = int(os.environ.get("GROWTH_MAX_POSTS", "30"))
+# アフィリンク必須かどうか（"0"でインプ閾値のみ。一旦OFF運用）
+AFFI_ONLY = os.environ.get("GROWTH_AFFI_ONLY", "1") == "1"
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 NAV_TIMEOUT = 60_000
 
@@ -117,6 +119,12 @@ def notify_slack(tweet, no):
 def main():
     if not collector.APPS_SCRIPT_URL or not collector.TOKEN:
         sys.exit("APPS_SCRIPT_URL / APPS_SCRIPT_TOKEN が未設定です")
+
+    # 初回バックフィル時: 過去の「アフィリンクなし」等の判定NG履歴を消して
+    # 再評価させる（GROWTH_CLEAR_REJECTS=1 のときだけ）
+    if os.environ.get("GROWTH_CLEAR_REJECTS") == "1":
+        res = call_api(params="action=cleargrowthrejects")
+        print(f"判定NG履歴クリア: {res}")
 
     config = call_api(params="action=config")
     if config.get("error"):
@@ -203,8 +211,8 @@ def main():
                 print(f"  skip (商業AVリンク): {t['url']}")
                 rejected.append(t["id"])
                 continue
-            if not (t.get("reply_link") or t.get("self_reply_link")
-                    or t.get("own_link_ok")):
+            if AFFI_ONLY and not (t.get("reply_link") or t.get("self_reply_link")
+                                  or t.get("own_link_ok")):
                 print(f"  skip (アフィリンクなし): {t['url']}")
                 rejected.append(t["id"])
                 continue

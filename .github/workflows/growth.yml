@@ -5,12 +5,33 @@ on:
     # 3時間おき（GitHubのscheduleは遅延・スキップされうる）
     - cron: "47 */3 * * *"
   workflow_dispatch:
+    inputs:
+      max_age_days:
+        description: "スキャン窓（日）。初回バックフィルは180等"
+        required: false
+        default: "30"
+      max_scrolls:
+        description: "1アカあたり最大スクロール回数"
+        required: false
+        default: "40"
+      max_posts:
+        description: "1回の実行で保存する最大件数"
+        required: false
+        default: "30"
+      affi_only:
+        description: "アフィリンク必須 (1=必須, 0=インプのみ)"
+        required: false
+        default: "0"
+      clear_rejects:
+        description: "判定NG履歴をクリアして再評価 (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   growth:
     concurrency: growth
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -50,9 +71,11 @@ jobs:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          GROWTH_MAX_SCROLLS: "40"
-          GROWTH_MAX_AGE_DAYS: "30"
-          GROWTH_MAX_POSTS: "30"
+          GROWTH_MAX_SCROLLS: ${{ inputs.max_scrolls || '40' }}
+          GROWTH_MAX_AGE_DAYS: ${{ inputs.max_age_days || '30' }}
+          GROWTH_MAX_POSTS: ${{ inputs.max_posts || '30' }}
+          GROWTH_AFFI_ONLY: ${{ inputs.affi_only || '0' }}
+          GROWTH_CLEAR_REJECTS: ${{ inputs.clear_rejects == 'true' && '1' || '0' }}
           HEADFUL: "1"
         run: xvfb-run -a python growth_tracker.py
 

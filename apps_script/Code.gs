@@ -320,6 +320,14 @@ function doGet(e) {
       return ok({ added: ids.length });
     }
 
+    // growth側の判定NG履歴(J列)を全消去して再評価させる:
+    // ?action=cleargrowthrejects
+    if (action === "cleargrowthrejects") {
+      const lastCfg = Math.max(cfg.getLastRow(), 4);
+      if (lastCfg >= 5) cfg.getRange(5, 10, lastCfg - 4, 1).clearContent();
+      return ok({ cleared: true });
+    }
+
     // 既存行の高さと画像列幅を一括調整: ?action=fixlayout
     if (action === "fixlayout") {
       const sheet = ss.getSheetByName(DATA_SHEET);
