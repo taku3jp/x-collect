@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       params:
-        description: "webhookに渡すクエリ（例: action=list&sheet=growth）"
+        description: "webhookに渡すクエリ（例: action=list&sheet=growth）。slack_test でSlackテスト通知"
         required: true
 
 jobs:
@@ -15,7 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Slack test notification
+        if: inputs.params == 'slack_test'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"text":"テスト通知です（x-collect接続確認）"}'
       - name: Call Apps Script webhook
+        if: inputs.params != 'slack_test'
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
