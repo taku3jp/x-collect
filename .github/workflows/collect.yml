@@ -1,114 +1,177 @@
-name: fixed-reobservation-branch-pilot
-
-# [branch-only] Dispatch shim for the manual re-observation pilot.
-# [branch-only] DO NOT merge this file to main and DO NOT include it in
-# [branch-only] a PR. It exists only on this branch so the pilot can be
-# [branch-only] dispatched with `--ref <branch>`. The normal scheduled
-# [branch-only] collect workflow stays on the default main branch.
-
-# Manual-only candidate workflow: re-observes a fixed manifest of public
-# post URLs and uploads a metadata-only JSON artifact. No schedule, no
-# pushes, no WARP/proxy additions, no sheet writes.
-# Early gate: read approval and manifest validation run right after
-# checkout/setup, before dependency install and before the X session
-# secret is restored. A failing gate starts nothing further.
+name: collect-x-posts
 
 on:
-  workflow_dispatch:
+  schedule:
+    # 毎時23分に起動（GitHubのscheduleは遅延・スキップされるため頻度を上げ、
+    # ワークフロー内で前回から1.5時間未満ならスキップして実質1.5時間おきにする）
+    - cron: "23 * * * *"
+  workflow_dispatch: # Actionsタブから手動実行も可能
     inputs:
-      manifest_json:
-        description: "再観測manifest JSON (version 1, 最大100件/最大72時間)"
-        required: true
-        default: ""
-      read_approved:
-        description: "公開投稿の閲覧(read)承認。true 以外は拒否"
+      gas_query:
+        description: "Webhookクエリ（例: action=delete&ids=123,456 / action=list）"
         required: false
-        type: boolean
-        default: false
-
-permissions:
-  contents: read
-
-concurrency:
-  group: reobserve
-  cancel-in-progress: false
+        default: ""
+      reimage_id:
+        description: "画像を差し替える行のstatus id"
+        required: false
+        default: ""
+      reimage_path:
+        description: "差し替えるPNGのリポジトリパス（例: tmp/reimage.png）"
+        required: false
+        default: ""
+      reimage_dir:
+        description: "一括差し替え: {statusId}.png を含むディレクトリ"
+        required: false
+        default: ""
 
 jobs:
-  reobserve:
+  gas:
+    if: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.gas_query != '' || github.event.inputs.reimage_id != '' || github.event.inputs.reimage_dir != '') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Call Apps Script webhook
+        if: ${{ github.event.inputs.gas_query != '' }}
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          QUERY: ${{ github.event.inputs.gas_query }}
+        run: |
+          resp=$(curl -sfL "$APPS_SCRIPT_URL?token=$APPS_SCRIPT_TOKEN&$QUERY")
+          echo "$resp"
+      - name: Reimage row via webhook
+        if: ${{ github.event.inputs.reimage_id != '' }}
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REIMAGE_ID: ${{ github.event.inputs.reimage_id }}
+          REIMAGE_PATH: ${{ github.event.inputs.reimage_path }}
+        run: |
+          curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/$REIMAGE_PATH" \
+            -o /tmp/reimage.png
+          python3 - <<PYEOF
+          import base64, json, os, urllib.request
+          body = json.dumps({
+              "token": os.environ["APPS_SCRIPT_TOKEN"],
+              "reimageId": os.environ["REIMAGE_ID"],
+              "imageBase64": base64.b64encode(open("/tmp/reimage.png","rb").read()).decode(),
+          }).encode()
+          req = urllib.request.Request(os.environ["APPS_SCRIPT_URL"],
+              data=body, method="POST")
+          req.add_header("Content-Type", "text/plain")
+          print(urllib.request.urlopen(req, timeout=120).read().decode()[:500])
+          PYEOF
+      - name: Batch reimage rows via webhook
+        if: ${{ github.event.inputs.reimage_dir != '' }}
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          REIMAGE_DIR: ${{ github.event.inputs.reimage_dir }}
+        timeout-minutes: 30
+        run: |
+          python3 - <<PYEOF
+          import base64, json, os, urllib.request, glob
+          files = sorted(glob.glob(os.path.join(os.environ["REIMAGE_DIR"], "*.png")))
+          print(f"{len(files)} files")
+          for f in files:
+              sid = os.path.splitext(os.path.basename(f))[0]
+              body = json.dumps({
+                  "token": os.environ["APPS_SCRIPT_TOKEN"],
+                  "reimageId": sid,
+                  "imageBase64": base64.b64encode(open(f,"rb").read()).decode(),
+              }).encode()
+              for attempt in range(3):
+                  try:
+                      req = urllib.request.Request(
+                          os.environ["APPS_SCRIPT_URL"], data=body, method="POST")
+                      req.add_header("Content-Type", "text/plain")
+                      print(sid, urllib.request.urlopen(req, timeout=180)
+                            .read().decode()[:200], flush=True)
+                      break
+                  except Exception as e:
+                      print(sid, "retry", attempt, e, flush=True)
+          PYEOF
+
+  collect:
+    if: ${{ github.event_name == 'schedule' || (github.event.inputs.gas_query == '' && github.event.inputs.reimage_id == '' && github.event.inputs.reimage_dir == '') }}
+    concurrency: collect  # 定期実行と手動実行の並走を防止（二重保存対策）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
+      - name: 直近3時間以内にschedule実行済みならスキップ
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          last=$(gh run list --workflow collect-x-posts --event schedule \
+            --status completed --limit 1 --json createdAt -q '.[0].createdAt // ""')
+          if [ -z "$last" ]; then
+            echo "初回schedule実行"; exit 0
+          fi
+          diff=$(( $(date +%s) - $(date -d "$last" +%s) ))
+          echo "前回schedule: $last (${diff}秒前)"
+          if [ "$diff" -lt 5400 ]; then
+            echo "1.5時間未満のためスキップ"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           python-version: "3.12"
 
-      - name: Gate - read approval + manifest validation (env -> python)
-        env:
-          MANIFEST_JSON: ${{ inputs.manifest_json }}
-          READ_APPROVED: ${{ inputs.read_approved }}
-        run: |
-          python3 - <<'PYEOF'
-          import os, pathlib, sys
-          from datetime import datetime, timezone
-          from fixed_reobserve import (ManifestError, check_window,
-                                       load_manifest)
-          if os.environ.get("READ_APPROVED") != "true":
-              print("refused: read_approved is not true",
-                    file=sys.stderr)
-              sys.exit(1)
-          raw = os.environ.get("MANIFEST_JSON", "")
-          try:
-              manifest = load_manifest(raw)
-          except ManifestError as e:
-              print("manifest_invalid: " + e.code, file=sys.stderr)
-              sys.exit(1)
-          gate = check_window(manifest, datetime.now(timezone.utc))
-          if gate:
-              print("manifest_invalid: " + gate, file=sys.stderr)
-              sys.exit(1)
-          pathlib.Path("reobserve_manifest.json").write_text(
-              raw, encoding="utf-8")
-          print("manifest ok: %d posts" % len(manifest["posts"]))
-          PYEOF
-
       - uses: actions/cache@v4
+        if: steps.guard.outputs.skip != 'true'
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Install dependencies
+        if: steps.guard.outputs.skip != 'true'
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Restore X session (0600, never printed)
+      - name: Setup Cloudflare WARP (residential-like egress)
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ noble main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq && sudo apt-get install -y -qq cloudflare-warp
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos mode warp
+          warp-cli --accept-tos connect
+          sleep 5
+          warp-cli --accept-tos status || true
+          curl -s --max-time 15 https://cloudflare.com/cdn-cgi/trace | head -5
+
+      - name: Restore X session
+        if: steps.guard.outputs.skip != 'true'
+        run: echo "$X_STATE_JSON" > state.json
         env:
           X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
-        run: |
-          python3 - <<'PYEOF'
-          import os
-          fd = os.open("state.json",
-                       os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-          with os.fdopen(fd, "w", encoding="utf-8") as f:
-              f.write(os.environ["X_STATE_JSON"])
-          PYEOF
 
-      - name: Run fixed re-observation
+      - name: Run collector
+        if: steps.guard.outputs.skip != 'true'
         env:
-          X_STATE_PATH: state.json
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
+          MAX_SCROLLS: "300"
+          MAX_SHOTS: "200"
           HEADFUL: "1"
-        run: |
-          xvfb-run -a python fixed_reobserve.py \
-            --manifest reobserve_manifest.json \
-            --output observations.json --read-approved
+        run: xvfb-run -a python collector.py
 
-      - name: Upload observation metadata (JSON only)
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.guard.outputs.skip != 'true'
         with:
-          name: x-fixed-observations
-          path: observations.json
+          name: debug
+          path: debug_*.png
           if-no-files-found: ignore
           retention-days: 7
