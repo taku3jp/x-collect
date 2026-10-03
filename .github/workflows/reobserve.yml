@@ -1,10 +1,4 @@
-name: fixed-reobservation-branch-pilot
-
-# [branch-only] Dispatch shim for the manual re-observation pilot.
-# [branch-only] DO NOT merge this file to main and DO NOT include it in
-# [branch-only] a PR. It exists only on this branch so the pilot can be
-# [branch-only] dispatched with `--ref <branch>`. The normal scheduled
-# [branch-only] collect workflow stays on the default main branch.
+name: reobserve-fixed-posts
 
 # Manual-only candidate workflow: re-observes a fixed manifest of public
 # post URLs and uploads a metadata-only JSON artifact. No schedule, no
