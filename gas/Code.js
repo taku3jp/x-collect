@@ -133,6 +133,39 @@ function doGet(e) {
       return ok({ token: t, bootstrapped: created });
     }
 
+    // 「実際伸びた投稿」タブの最新30件をRSS 2.0で返す: ?action=rss
+    // Slackの /feed subscribe で流す用（アプリインストール不要の通知経路）
+    // 推測不能なURLのためtoken不要で公開
+    if (action === "rss") {
+      const ss0 = SpreadsheetApp.getActiveSpreadsheet();
+      const sheet = ss0.getSheetByName(GROWTH_SHEET);
+      const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      let items = "";
+      const last = sheet ? sheet.getLastRow() : 1;
+      for (let r = 2; r <= Math.min(last, 31); r++) {
+        const no = sheet.getRange(r, 1).getValue();
+        const date = String(sheet.getRange(r, 2).getValue());
+        const url = String(sheet.getRange(r, 3).getValue());
+        const text = String(sheet.getRange(r, 4).getValue());
+        const imp = sheet.getRange(r, 8).getValue();
+        const m = url.match(/status\/(\d+)/);
+        items += `<item><title>伸びた投稿 No.${esc(no)}（インプ ${esc(imp)}）</title>`
+          + `<link>${esc(url)}</link>`
+          + `<guid isPermaLink="false">${m ? m[1] : url}</guid>`
+          + `<pubDate>${esc(date)}</pubDate>`
+          + `<description>${esc(text.slice(0, 200))}\n${esc(url)}\n`
+          + `スプシ: ${esc(ss0.getUrl())}#gid=${sheet.getSheetId()}</description></item>`;
+      }
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>`
+        + `<rss version="2.0"><channel>`
+        + `<title>実際伸びた投稿</title>`
+        + `<link>${esc(ss0.getUrl())}#gid=${sheet.getSheetId()}</link>`
+        + `<description>10万インプ超の投稿通知</description>${items}</channel></rss>`;
+      return ContentService.createTextOutput(xml)
+        .setMimeType(ContentService.MimeType.XML);
+    }
+
     checkToken(e);
     ensureSheets_();
 
@@ -476,6 +509,19 @@ function doPost(e) {
         sheet.getRange(2, IMAGE_COL).setValue(cellImage);
       } catch (imgErr) {
         sheet.insertImage(blob, IMAGE_COL, 2);
+      }
+    }
+
+    // growth保存時はメール通知（Slack webhook不要のフォールバック経路）
+    if (body.target === "growth") {
+      try {
+        MailApp.sendEmail(
+          Session.getEffectiveUser().getEmail(),
+          `伸びた投稿を検出 No.${no}（インプ ${Number(r.impressions || 0).toLocaleString()}）`,
+          `${r.url || ""}\n\n${r.text || ""}\n\n`
+            + `スプシ: ${ss.getUrl()}#gid=${sheet.getSheetId()}`);
+      } catch (mailErr) {
+        // メール失敗でも保存は成功扱い
       }
     }
     return ok({ saved: true, no });
