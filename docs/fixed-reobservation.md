@@ -66,21 +66,39 @@ playwright は import しない）。gate 失敗時は以後の step を起動�
 `X_STATE_JSON` secret は復元されない。入力は shell 補間せず
 env → Python で渡す。
 
-## ブランチ専用 dispatch shim (`collect.yml`)
+## ブランチ専用 dispatch shim (`collect.yml`) — 別ブランチのみ
 
-このブランチの `.github/workflows/collect.yml` は `reobserve.yml` と
-同一内容の manual-only workflow を `fixed-reobservation-branch-pilot`
-という name で置き換えた **dispatch shim** である。
+GitHub Actions の `workflow_dispatch` は default branch に存在する
+workflow しか起動できないが、ブランチ上に登録済みの workflow file は
+`gh workflow run fixed-reobservation-branch-pilot --ref <branch>` で
+手動起動できる。手動 pilot はこの制約のため、実装本体とは**別ブランチ**
+`codex/fixed-x-reobservation-20261003` 上でだけ
+`.github/workflows/collect.yml` を `reobserve.yml` と同一内容・name のみ
+`fixed-reobservation-branch-pilot` に置き換えた **dispatch shim** に
+差し替えて実行した。
 
-- **main へ merge 禁止。PR にも含めない。**
-- GitHub Actions の `workflow_dispatch` は default branch に存在する
-  workflow しか起動できないが、ブランチ上に登録済みの workflow file は
-  `gh workflow run fixed-reobservation-branch-pilot --ref <branch>` で
-  手動起動できる。pilot を main へ merge せずに実行するためだけに
-  このファイルを置換している（置換は意図的）。
-- 通常の collect（schedule / GAS webhook / 新規発見収集）は
-  default branch (main) 側の元ファイルで維持される。
-  この shim には schedule・GAS・通常収集を一切含めない。
+- **その pilot ブランチは main へ merge 禁止。本PRにも含めない。**
+- **本PRの diff は4ファイル追加のみ**（`.github/workflows/reobserve.yml`、
+  `fixed_reobserve.py`、`tests/test_fixed_reobserve.py`、本doc）。
+  通常の `.github/workflows/collect.yml` は一切変更しない。
+- shim には schedule・GAS・通常収集を一切含めない。通常の collect
+  （schedule / GAS webhook / 新規発見収集）は default branch (main)
+  側の元ファイルで維持される。
+
+## 手動 pilot 実行結果（2026-10-03）
+
+上記 pilot ブランチの shim を `workflow_dispatch` で2回手動実行した
+（GitHub Actions run `37107210372` / `37107329279`、間隔 約2分）。
+
+- 同一の公開post `2105901234863698400` を再観測し、
+  impressions `194277 → 194360`、likes `865 → 866` を観測。
+- もう1件の対象は `unavailable`（対象IDがレスポンスに無い。
+  削除確定とは呼ばない）。
+- run 全体の `state` は `partial` であり終了コードは非0。
+  `partial` を成功とはみなさない。
+- これは約2分間隔の再観測であり、**24h比較・7日比較・
+  アプリ（FanScope）取込・時計精度の受入はいずれも未達**。
+  `clockEvidence` が存在しても取得時計精度の受入とは呼ばない。
 
 ## 取得の約束
 

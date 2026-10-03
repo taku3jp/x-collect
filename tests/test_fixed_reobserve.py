@@ -1016,54 +1016,5 @@ class WorkflowYamlTests(unittest.TestCase):
                         self.text.index("X_STATE_JSON"))
 
 
-class CollectBranchPilotTests(unittest.TestCase):
-    """The branch version of collect.yml is a manual-only dispatch shim
-    so the pilot workflow can be run with --ref on this branch. It must
-    carry no schedule / GAS / normal collection, and must stay in sync
-    with reobserve.yml (same inputs, same steps)."""
-    PATH = Path(__file__).resolve().parent.parent / \
-        ".github" / "workflows" / "collect.yml"
-    REOBSERVE = Path(__file__).resolve().parent.parent / \
-        ".github" / "workflows" / "reobserve.yml"
-
-    def setUp(self):
-        self.text = self.PATH.read_text("utf-8")
-
-    def test_name_and_manual_only(self):
-        self.assertIn("name: fixed-reobservation-branch-pilot",
-                      self.text)
-        self.assertIn("workflow_dispatch:", self.text)
-        self.assertNotIn("schedule:", self.text)
-        self.assertNotIn("cron:", self.text)
-
-    def test_no_gas_or_normal_collect(self):
-        for needle in ("APPS_SCRIPT_URL", "collector.py",
-                       "warp-cli", "gas_query", "reimage"):
-            self.assertNotIn(needle, self.text)
-
-    def test_same_inputs(self):
-        self.assertIn("manifest_json:", self.text)
-        self.assertIn("read_approved:", self.text)
-
-    def test_branch_only_notice(self):
-        self.assertIn("branch-only", self.text)
-        self.assertIn("merge", self.text)
-
-    def test_in_sync_with_reobserve(self):
-        # identical workflow modulo the name line and comment lines
-        def body(text):
-            return [l for l in text.splitlines()
-                    if l.strip() and not l.lstrip().startswith("#")]
-        re = self.REOBSERVE.read_text("utf-8")
-        self.assertEqual(
-            body(self.text.replace("fixed-reobservation-branch-pilot",
-                                   "reobserve-fixed-posts", 1)),
-            body(re))
-
-    def test_gate_before_session_restore(self):
-        gate = self.text.index("read approval + manifest validation")
-        self.assertLess(gate, self.text.index("Restore X session"))
-
-
 if __name__ == "__main__":
     unittest.main()
