@@ -299,6 +299,29 @@ function doGet(e) {
       return ok({ cleaned });
     }
 
+    // 本文/URL/素材リンクがキーワードに一致する行を削除: ?action=deletetext&q=ジュキヤ,じゅきや
+    // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
+    if (action === "deletetext") {
+      const qs = String((e.parameter || {}).q || "").split(",")
+        .map(s => s.trim().toLowerCase()).filter(Boolean);
+      const sheet = ss.getSheetByName(
+        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+      const nos = [];
+      if (qs.length) {
+        for (let r = sheet.getLastRow(); r >= 2; r--) {
+          const hay = (String(sheet.getRange(r, 3).getValue()) + " " +
+                       String(sheet.getRange(r, 4).getValue()) + " " +
+                       String(sheet.getRange(r, 5).getValue())).toLowerCase();
+          if (qs.some(q => hay.includes(q))) {
+            nos.push(Number(sheet.getRange(r, 1).getValue()) || 0);
+            sheet.deleteRow(r);
+          }
+        }
+      }
+      if (nos.length) renumber_(sheet);
+      return ok({ deleted: nos.length, nos });
+    }
+
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {

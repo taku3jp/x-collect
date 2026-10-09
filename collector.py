@@ -835,6 +835,8 @@ def main():
         r"漫画|コミック|単行本|試し読み|電子書籍|成年向け|DLsite|FANZA同人"
         r"|マンガ|同人誌|CG集|エロゲ|（\s*\d+\s*/\s*\d+\s*）|\(\s*\d+\s*/\s*\d+\s*\)"
     )
+    # バラエティ/ネタ動画の釣り文パターン（芸人・YouTuber名等）
+    NG_WORDS_RE = re.compile(r"ジュキヤ|ジュキや|じゅきや|jukiya", re.I)
 
     def is_target(t, strict=True):
         if ja_only and t["lang"] != "ja":
@@ -847,6 +849,8 @@ def main():
             return False  # 商業宣伝文パターンは対象外
         if sensitive_only and MANGA_RE.search(t["text"]):
             return False  # 漫画系ポストは対象外
+        if sensitive_only and NG_WORDS_RE.search(t["text"]):
+            return False  # バラエティ/ネタ動画の釣り文は対象外
         if not sensitive_only:
             # キーワードフィルタのみ運用（キーワード空なら全件）
             return not keywords or kw_match(t)
