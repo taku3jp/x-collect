@@ -285,6 +285,20 @@ function doGet(e) {
       return ok({ files });
     }
 
+    // 全行のポスト文からt.coリンクを除去: ?action=cleantext
+    if (action === "cleantext") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      let cleaned = 0;
+      for (let r = 2; r <= sheet.getLastRow(); r++) {
+        const cell = sheet.getRange(r, 4);
+        const t = String(cell.getValue());
+        const nt = t.replace(/https:\/\/t\.co\/\S+/g, "")
+          .replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+        if (nt !== t) { cell.setValue(nt); cleaned++; }
+      }
+      return ok({ cleaned });
+    }
+
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {

@@ -187,12 +187,25 @@ def parse_tweet(tr, fallback_user=""):
     except ValueError:
         date_str, sort_key = created, 0.0
 
+    # 本文からメディア添付のt.coリンクを除去（表示用の重複なので不要）
+    text = legacy.get("full_text") or ""
+    for m in media_list:
+        u = m.get("url")
+        if u:
+            text = text.replace(u, "")
+    # 残ったt.coリンク（実リンク）は展開URLに置き換えて読める形に
+    for u in (legacy.get("entities") or {}).get("urls", []):
+        if u.get("url") and u["url"] in text:
+            text = text.replace(u["url"], u.get("expanded_url") or "")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text).strip()
+
     return {
         "id": tr.get("rest_id") or "",
         "user": screen_name,
         "url": (f"https://x.com/{screen_name}/status/{tr.get('rest_id')}"
                 if screen_name else f"https://x.com/i/web/status/{tr.get('rest_id')}"),
-        "text": legacy.get("full_text") or "",
+        "text": text,
         "date": date_str,
         "sort_key": sort_key,
         "media": "\n".join(u for u in media_urls if u),
