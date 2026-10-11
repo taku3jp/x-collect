@@ -32,8 +32,15 @@ from collector import (call_api, iter_tweet_results, parse_tweet,
                        _resolve_chain, REDIRECT_HOSTS, JST)
 
 TARGETS = ("xfans.tokyo/shinohara_kaede", "myfans.jp/shinohara_personal")
+TARGET_HANDLES = ("shinohara_kaede", "shinohara_personal")
 # xfans公式短縮等を遷移先解決対象に追加
-REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans")
+REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans", "mfns.jp")
+# 投稿ページURL(/posts/<uuid>)は作者名を含まないため、
+# ページをレンダリングして作者プロフィールリンクで判定する
+CREATOR_HOSTS = ("xfans.tokyo", "myfans.jp")
+_CTX = None
+_CREATOR_CACHE = {}
+_RENDER_BUDGET = [60]
 SEARCH_QUERIES = (
     'url:"shinohara_kaede" OR url:"shinohara_personal"',
     '"xfans.tokyo/shinohara_kaede" OR "myfans.jp/shinohara_personal"',
@@ -47,10 +54,44 @@ NAV_TIMEOUT = 60_000
 XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
 
 
+def _post_page_is_shinohara(url):
+    """xfans/myfansの投稿ページを開き、作者プロフィールリンクが
+    篠原のハンドルか判定。結果はキャッシュ。"""
+    key = url.split("?")[0].rstrip("/")
+    if key in _CREATOR_CACHE:
+        return _CREATOR_CACHE[key]
+    verdict = False
+    if _CTX is not None and _RENDER_BUDGET[0] > 0:
+        _RENDER_BUDGET[0] -= 1
+        pg = None
+        try:
+            pg = _CTX.new_page()
+            pg.goto(url, wait_until="domcontentloaded", timeout=30000)
+            pg.wait_for_timeout(5000)
+            hrefs = pg.eval_on_selector_all(
+                "a[href]", "els=>els.map(e=>e.getAttribute('href'))")
+            verdict = any(any(h in (x or "").lower()
+                              for h in TARGET_HANDLES) for x in hrefs)
+            print(f"    {url} → 作者判定: "
+                  + ("篠原" if verdict else "別作者"))
+        except Exception:
+            pass
+        finally:
+            if pg:
+                try:
+                    pg.close()
+                except Exception:
+                    pass
+    _CREATOR_CACHE[key] = verdict
+    return verdict
+
+
 def _hits_target(url, budget):
-    """URLが篠原ページへ着地するか。短縮/誘導は遷移先まで解決。"""
+    """URLが篠原ページへ着地するか。短縮/誘導は遷移先まで解決。
+    投稿ページ(/posts/<uuid>)はページを開いて作者を判定する。"""
     if any(t in url.lower() for t in TARGETS):
         return True
+    final = url
     host = urllib.parse.urlparse(url).netloc.lower()
     if budget[0] > 0 and any(h in host for h in REDIRECTS):
         budget[0] -= 1
@@ -59,7 +100,12 @@ def _hits_target(url, budget):
         except Exception:
             return False
         chain = " ".join(hops + [final]).lower() + " " + html
-        return any(t in chain for t in TARGETS)
+        if any(t in chain for t in TARGETS):
+            return True
+    fhost = urllib.parse.urlparse(final).netloc.lower()
+    fpath = urllib.parse.urlparse(final).path
+    if any(h in fhost for h in CREATOR_HOSTS) and "/posts/" in fpath:
+        return _post_page_is_shinohara(final)
     return False
 
 
@@ -266,6 +312,8 @@ def main():
     saved = 0
     with sync_playwright() as p:
         browser, page = _launch(p)
+        global _CTX
+        _CTX = page.context
         if BACKFILL:
             # 既存収集行のリプ欄を精査してマッチ分をコピー
             rows = []
