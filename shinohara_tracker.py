@@ -32,9 +32,12 @@ from collector import (call_api, iter_tweet_results, parse_tweet,
                        _resolve_chain, REDIRECT_HOSTS, JST)
 
 TARGETS = ("xfans.tokyo/shinohara_kaede", "myfans.jp/shinohara_personal")
+# xfans公式短縮等を遷移先解決対象に追加
+REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans")
 SEARCH_QUERIES = (
     'url:"shinohara_kaede" OR url:"shinohara_personal"',
     '"xfans.tokyo/shinohara_kaede" OR "myfans.jp/shinohara_personal"',
+    '"shinohara_kaede" OR "shinohara_personal"',
 )
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 BACKFILL = os.environ.get("SHINOHARA_BACKFILL") == "1"
@@ -49,7 +52,7 @@ def _hits_target(url, budget):
     if any(t in url.lower() for t in TARGETS):
         return True
     host = urllib.parse.urlparse(url).netloc.lower()
-    if budget[0] > 0 and any(h in host for h in REDIRECT_HOSTS):
+    if budget[0] > 0 and any(h in host for h in REDIRECTS):
         budget[0] -= 1
         try:
             hops, final, html, _ = _resolve_chain(url)
@@ -148,11 +151,54 @@ def _collect_targets(page):
     return targets
 
 
+def _fetch_thread_full(page, tid):
+    """詳細ページを開き、返信欄も展開してTweetDetailを全捕捉。
+    （_fetch_status_thread は初期レスポンスのみで、スクロールしないと
+      出ない返信を取りこぼすため）"""
+    captured = []
+
+    def on_response(res):
+        if "TweetDetail" in res.url or "TweetResultByRestId" in res.url:
+            try:
+                captured.append(res.json())
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+    try:
+        page.goto(f"https://x.com/i/status/{tid}", timeout=NAV_TIMEOUT,
+                  wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        # 返信欄を展開（collector.get_tweet_detail と同じ要領）
+        try:
+            for _ in range(2):
+                for b in page.get_by_text(
+                        re.compile("返信をさらに表示|Show more replies")
+                ).all():
+                    try:
+                        b.click(timeout=1500)
+                    except Exception:
+                        pass
+                page.mouse.wheel(0, 3000)
+                page.wait_for_timeout(1200)
+                page.mouse.wheel(0, 3000)
+                page.wait_for_timeout(1200)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    finally:
+        page.remove_listener("response", on_response)
+    results = []
+    for body in captured:
+        iter_tweet_results(body, results)
+    return tid, results
+
+
 def _save_row(page, tid, existing, shot=True):
     """status id のポストを詳細取得して篠原バズタブへ保存。
     returns: "saved" / "skip"（非該当・重複） / "fail"（取得・保存失敗）"""
-    duser, did, results = _fetch_status_thread(
-        page, f"https://x.com/i/status/{tid}")
+    did, results = _fetch_thread_full(page, tid)
     if not results:
         print(f"  {tid} 詳細取得できず（削除済み?）")
         return "fail"
