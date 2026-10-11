@@ -248,7 +248,7 @@ def main():
                     saved += 1
                 if status == "fail":
                     consec_fail += 1
-                    if consec_fail >= 15:
+                    if consec_fail >= 30:
                         print("連続失敗のため中断（再実行してください）")
                         break
                 else:
@@ -256,7 +256,7 @@ def main():
                 if saved >= MAX_SAVE:
                     print(f"保存上限 {MAX_SAVE}件に到達")
                     break
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(2000)
         else:
             targets = _collect_targets(page) - existing
             print(f"保存対象: {len(targets)}件")
