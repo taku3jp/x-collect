@@ -10,6 +10,7 @@
 
 const DATA_SHEET = "X収集";
 const GROWTH_SHEET = "実際伸びた投稿";
+const SHINOHARA_SHEET = "篠原バズ";
 const CONFIG_SHEET = "設定";
 const IMAGE_FOLDER_NAME = "X収集画像";
 const IMAGE_COL = 6;        // F列 = 動画内容
@@ -68,6 +69,15 @@ function ensureSheets_() {
   }
   growth.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
   growth.setColumnWidth(4, 300);
+
+  let shino = ss.getSheetByName(SHINOHARA_SHEET);
+  if (!shino) shino = ss.insertSheet(SHINOHARA_SHEET);
+  if (!shino.getRange("A1").getValue()) {
+    shino.getRange(1, 1, 1, 11).setValues([HEADER]);
+    shino.setFrozenRows(1);
+  }
+  shino.setColumnWidth(IMAGE_COL, IMAGE_COL_WIDTH);
+  shino.setColumnWidth(4, 300);
   try { installTriggers_(); } catch (e) { /* 権限不足なら無視 */ }
 }
 
@@ -76,7 +86,7 @@ function ensureSheets_() {
 function onSheetChange_(e) {
   if (e && e.changeType === "REMOVE_ROW") {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    for (const name of [DATA_SHEET, GROWTH_SHEET]) {
+    for (const name of [DATA_SHEET, GROWTH_SHEET, SHINOHARA_SHEET]) {
       const sheet = ss.getSheetByName(name);
       if (sheet) renumber_(sheet);
     }
@@ -101,6 +111,13 @@ function renumber_(sheet) {
     sheet.getRange(r, 1).setValue(++n);
   }
   return n;
+}
+
+// sheet パラメータ名 → タブ名
+function sheetNameFor_(p) {
+  if (p === "growth") return GROWTH_SHEET;
+  if (p === "shinohara") return SHINOHARA_SHEET;
+  return DATA_SHEET;
 }
 
 function ok(obj) {
@@ -258,12 +275,12 @@ function doGet(e) {
     }
 
     // 指定status idを含むURLの行を削除: ?action=delete&ids=123,456
-    // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
+    // &sheet=growth|shinohara で別タブ側を対象にする
     if (action === "delete") {
       const ids = String((e.parameter || {}).ids || "").split(",")
         .map(s => s.trim()).filter(Boolean);
       const sheet = ss.getSheetByName(
-        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+        sheetNameFor_((e.parameter || {}).sheet));
       let deleted = 0;
       for (let r = sheet.getLastRow(); r >= 2; r--) {
         const url = String(sheet.getRange(r, 3).getValue());
@@ -305,7 +322,7 @@ function doGet(e) {
       const qs = String((e.parameter || {}).q || "").split(",")
         .map(s => s.trim().toLowerCase()).filter(Boolean);
       const sheet = ss.getSheetByName(
-        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+        sheetNameFor_((e.parameter || {}).sheet));
       const nos = [];
       if (qs.length) {
         for (let r = sheet.getLastRow(); r >= 2; r--) {
@@ -326,7 +343,7 @@ function doGet(e) {
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {
       const sheet = ss.getSheetByName(
-        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+        sheetNameFor_((e.parameter || {}).sheet));
       const rows = [];
       for (let r = 2; r <= sheet.getLastRow(); r++) {
         rows.push({ no: sheet.getRange(r, 1).getValue(),
@@ -340,7 +357,7 @@ function doGet(e) {
     // 同一status idの重複行を削除（上=新しい行を残す）: ?action=dedupe
     if (action === "dedupe") {
       const sheet = ss.getSheetByName(
-        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+        sheetNameFor_((e.parameter || {}).sheet));
       const seen = {};
       let deleted = 0;
       for (let r = 2; r <= sheet.getLastRow(); r++) {
@@ -478,9 +495,8 @@ function doPost(e) {
     const body = JSON.parse(e.postData.contents);
     const r = body.row || {};
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    // {"target": "growth"} → 「実際伸びた投稿」タブ、それ以外は収集タブ
-    const sheet = ss.getSheetByName(
-      body.target === "growth" ? GROWTH_SHEET : DATA_SHEET);
+    // {"target": "growth"|"shinohara"} → 対応タブ、それ以外は収集タブ
+    const sheet = ss.getSheetByName(sheetNameFor_(body.target));
 
     // 既存行の画像を差し替え: {"reimageId": "<status id>", "imageBase64": "..."}
     if (body.reimageId && body.imageBase64) {
