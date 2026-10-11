@@ -23,6 +23,10 @@ on:
         description: "検索結果の最大スクロール回数"
         required: false
         default: "15"
+      start:
+        description: "バックフィル: スキップする先頭行数（前回途中まで進んだ分）"
+        required: false
+        default: "0"
 
 jobs:
   shinohara:
@@ -69,6 +73,7 @@ jobs:
           APPS_SCRIPT_TOKEN: ${{ secrets.APPS_SCRIPT_TOKEN }}
           SHINOHARA_BACKFILL: ${{ inputs.backfill == 'true' && '1' || '0' }}
           SHINOHARA_MAX_SAVE: ${{ inputs.max_save || '30' }}
+          SHINOHARA_START: ${{ inputs.start || '0' }}
           SHINOHARA_SEARCH_SCROLLS: ${{ inputs.search_scrolls || '15' }}
           HEADFUL: "1"
         run: xvfb-run -a python shinohara_tracker.py

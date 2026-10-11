@@ -40,7 +40,8 @@ REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans", "mfns.jp")
 CREATOR_HOSTS = ("xfans.tokyo", "myfans.jp")
 _CTX = None
 _CREATOR_CACHE = {}
-_RENDER_BUDGET = [60]
+_RENDER_BUDGET = [500]
+_RENDER_EXHAUSTED = [False]
 SEARCH_QUERIES = (
     'url:"shinohara_kaede" OR url:"shinohara_personal"',
     '"xfans.tokyo/shinohara_kaede" OR "myfans.jp/shinohara_personal"',
@@ -49,6 +50,7 @@ SEARCH_QUERIES = (
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 BACKFILL = os.environ.get("SHINOHARA_BACKFILL") == "1"
 MAX_SAVE = int(os.environ.get("SHINOHARA_MAX_SAVE", "30"))
+START = int(os.environ.get("SHINOHARA_START", "0"))
 SEARCH_SCROLLS = int(os.environ.get("SHINOHARA_SEARCH_SCROLLS", "15"))
 NAV_TIMEOUT = 60_000
 XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
@@ -56,39 +58,46 @@ XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
 
 def _post_page_is_shinohara(url):
     """xfans/myfansの投稿ページを開き、作者プロフィールリンクが
-    篠原のハンドルか判定。結果はキャッシュ。"""
+    篠原のハンドルか判定。結果はキャッシュ。
+    判定不能（予算切れ/エラー）は None を返す。"""
     key = url.split("?")[0].rstrip("/")
     if key in _CREATOR_CACHE:
         return _CREATOR_CACHE[key]
-    verdict = False
-    if _CTX is not None and _RENDER_BUDGET[0] > 0:
-        _RENDER_BUDGET[0] -= 1
-        pg = None
-        try:
-            pg = _CTX.new_page()
-            pg.goto(url, wait_until="domcontentloaded", timeout=30000)
-            pg.wait_for_timeout(5000)
-            hrefs = pg.eval_on_selector_all(
-                "a[href]", "els=>els.map(e=>e.getAttribute('href'))")
-            verdict = any(any(h in (x or "").lower()
-                              for h in TARGET_HANDLES) for x in hrefs)
-            print(f"    {url} → 作者判定: "
-                  + ("篠原" if verdict else "別作者"))
-        except Exception:
-            pass
-        finally:
-            if pg:
-                try:
-                    pg.close()
-                except Exception:
-                    pass
-    _CREATOR_CACHE[key] = verdict
+    if _CTX is None or _RENDER_BUDGET[0] <= 0:
+        if not _RENDER_EXHAUSTED[0]:
+            _RENDER_EXHAUSTED[0] = True
+            print("    作者判定の上限到達。以降の投稿ページは未確認扱い")
+        return None
+    _RENDER_BUDGET[0] -= 1
+    verdict = None
+    pg = None
+    try:
+        pg = _CTX.new_page()
+        pg.goto(url, wait_until="domcontentloaded", timeout=30000)
+        pg.wait_for_timeout(5000)
+        hrefs = pg.eval_on_selector_all(
+            "a[href]", "els=>els.map(e=>e.getAttribute('href'))")
+        verdict = any(any(h in (x or "").lower()
+                          for h in TARGET_HANDLES) for x in hrefs)
+        print(f"    {url} → 作者判定: "
+              + ("篠原" if verdict else "別作者"))
+    except Exception:
+        pass
+    finally:
+        if pg:
+            try:
+                pg.close()
+            except Exception:
+                pass
+    if verdict is not None:
+        _CREATOR_CACHE[key] = verdict
     return verdict
 
 
 def _hits_target(url, budget):
     """URLが篠原ページへ着地するか。短縮/誘導は遷移先まで解決。
-    投稿ページ(/posts/<uuid>)はページを開いて作者を判定する。"""
+    投稿ページ(/posts/<uuid>)はページを開いて作者を判定する。
+    True / False / None（判定不能）を返す。"""
     if any(t in url.lower() for t in TARGETS):
         return True
     final = url
@@ -98,7 +107,7 @@ def _hits_target(url, budget):
         try:
             hops, final, html, _ = _resolve_chain(url)
         except Exception:
-            return False
+            return None
         chain = " ".join(hops + [final]).lower() + " " + html
         if any(t in chain for t in TARGETS):
             return True
@@ -110,8 +119,10 @@ def _hits_target(url, budget):
 
 
 def _thread_has_target(results, tweet_id):
-    """会話内（focal含む）のポストのURLに篠原リンクがあるか。"""
+    """会話内（focal含む）のポストのURLに篠原リンクがあるか。
+    True / False / None（未確認のリンクが残った）を返す。"""
     budget = [8]
+    unknown = False
     conv = _conversation_ids(results, tweet_id)
     for tr in results:
         if tr.get("rest_id") not in conv:
@@ -119,9 +130,12 @@ def _thread_has_target(results, tweet_id):
         for u in _post_urls(tr.get("legacy") or {}):
             if XSTATUS_RE.search(u):
                 continue
-            if _hits_target(u, budget):
+            r = _hits_target(u, budget)
+            if r:
                 return True
-    return False
+            if r is None:
+                unknown = True
+    return None if unknown else False
 
 
 def _existing_ids():
@@ -252,7 +266,11 @@ def _save_row(page, tid, existing, shot=True):
     if not focal:
         print(f"  {tid} focalポストがレスポンスに無し")
         return "fail"
-    if not _thread_has_target(results, did):
+    verdict = _thread_has_target(results, did)
+    if verdict is None:
+        print(f"  {tid} リンク判定未確認（再試行対象）")
+        return "fail"
+    if not verdict:
         print(f"  {tid} リプ欄に篠原リンク確認できず → スキップ")
         return "skip"
     t = parse_tweet(focal)
@@ -320,7 +338,8 @@ def main():
             for sheet in ("", "growth"):
                 params = "action=list" + (f"&sheet={sheet}" if sheet else "")
                 rows += (call_api(params=params).get("rows") or [])
-            print(f"精査対象: {len(rows)}行")
+            print(f"精査対象: {len(rows)}行（先頭{START}行スキップ）")
+            rows = rows[START:]
             consec_fail = 0
             for i, row in enumerate(rows):
                 m = re.search(r"/status/(\d+)", row.get("url") or "")
