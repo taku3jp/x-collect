@@ -149,24 +149,25 @@ def _collect_targets(page):
 
 
 def _save_row(page, tid, existing, shot=True):
-    """status id のポストを詳細取得して篠原バズタブへ保存。"""
+    """status id のポストを詳細取得して篠原バズタブへ保存。
+    returns: "saved" / "skip"（非該当・重複） / "fail"（取得・保存失敗）"""
     duser, did, results = _fetch_status_thread(
         page, f"https://x.com/i/status/{tid}")
     if not results:
         print(f"  {tid} 詳細取得できず（削除済み?）")
-        return False
+        return "fail"
     focal = next((tr for tr in results if tr.get("rest_id") == did), None)
     if not focal:
         print(f"  {tid} focalポストがレスポンスに無し")
-        return False
+        return "fail"
     if not _thread_has_target(results, did):
         print(f"  {tid} リプ欄に篠原リンク確認できず → スキップ")
-        return False
+        return "skip"
     t = parse_tweet(focal)
     if DRY_RUN:
         print(f"  [DRY_RUN] {t['url']} imp={t['impressions']:,}"
               f" text={t['text'][:40]!r}")
-        return True
+        return "saved"
     page.evaluate("window.scrollTo(0, 0)")
     page.wait_for_timeout(500)
     shot_png = page.screenshot() if shot else None
@@ -184,12 +185,12 @@ def _save_row(page, tid, existing, shot=True):
         print(f"  saved No.{res.get('no')} {t['url']}"
               f" (imp {t['impressions']:,})")
         existing.add(did)
-        return True
+        return "saved"
     if res.get("duplicate"):
         existing.add(did)
-        return False
+        return "skip"
     print(f"  save failed {tid}: {res}", file=sys.stderr)
-    return False
+    return "fail"
 
 
 def _launch(p):
@@ -232,25 +233,26 @@ def main():
                 if not m or m.group(1) in existing:
                     continue
                 tid = m.group(1)
-                ok = False
+                status = "fail"
                 for attempt in range(3):
                     try:
-                        ok = _save_row(page, tid, existing)
+                        status = _save_row(page, tid, existing)
                     except Exception as e:
                         print(f"  [{i+1}/{len(rows)}] {tid} error: {e}",
                               file=sys.stderr)
-                        ok = False
+                        status = "fail"
                         page.wait_for_timeout(5000 * (attempt + 1))
                         continue
                     break
-                if ok:
+                if status == "saved":
                     saved += 1
-                    consec_fail = 0
-                else:
+                if status == "fail":
                     consec_fail += 1
                     if consec_fail >= 15:
                         print("連続失敗のため中断（再実行してください）")
                         break
+                else:
+                    consec_fail = 0
                 if saved >= MAX_SAVE:
                     print(f"保存上限 {MAX_SAVE}件に到達")
                     break
@@ -260,7 +262,7 @@ def main():
             print(f"保存対象: {len(targets)}件")
             for tid in sorted(targets, key=int):
                 try:
-                    if _save_row(page, tid, existing):
+                    if _save_row(page, tid, existing) == "saved":
                         saved += 1
                 except Exception as e:
                     print(f"  {tid} error: {e}", file=sys.stderr)
