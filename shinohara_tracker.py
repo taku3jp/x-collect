@@ -27,14 +27,17 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 import collector
+import urllib.request
+
 from collector import (call_api, iter_tweet_results, parse_tweet,
                        _post_urls, _conversation_ids, _fetch_status_thread,
-                       _resolve_chain, REDIRECT_HOSTS, JST)
+                       _resolve_chain, _RESOLVE_UA, REDIRECT_HOSTS, JST)
 
 TARGETS = ("xfans.tokyo/shinohara_kaede", "myfans.jp/shinohara_personal")
 TARGET_HANDLES = ("shinohara_kaede", "shinohara_personal")
-# xfans公式短縮等を遷移先解決対象に追加
-REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans", "mfns.jp")
+# xfans公式短縮・myfans短縮・meta refresh系短縮を遷移先解決対象に追加
+REDIRECTS = tuple(REDIRECT_HOSTS) + ("xfns.io", "x.fans", "mfns.jp",
+                                   "b-short.link", "mfco.link")
 # 投稿ページURL(/posts/<uuid>)は作者名を含まないため、
 # ページをレンダリングして作者プロフィールリンクで判定する
 CREATOR_HOSTS = ("xfans.tokyo", "myfans.jp")
@@ -57,9 +60,10 @@ XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
 
 
 def _post_page_is_shinohara(url):
-    """xfans/myfansの投稿ページを開き、作者プロフィールリンクが
-    篠原のハンドルか判定。結果はキャッシュ。
-    判定不能（予算切れ/エラー）は None を返す。"""
+    """xfans/myfansの投稿ページを開き、篠原関連か判定。
+    判定: 作者プロフィールリンクが篠原ハンドル、または
+    ページのタイトル/本文に「篠原」が含まれる（コラボ投稿を拾うため）。
+    結果はキャッシュ。判定不能（予算切れ/エラー）は None。"""
     key = url.split("?")[0].rstrip("/")
     if key in _CREATOR_CACHE:
         return _CREATOR_CACHE[key]
@@ -74,13 +78,23 @@ def _post_page_is_shinohara(url):
     try:
         pg = _CTX.new_page()
         pg.goto(url, wait_until="domcontentloaded", timeout=30000)
-        pg.wait_for_timeout(5000)
+        pg.wait_for_timeout(4000)
+        # 年齢確認ゲート（myfans等）
+        try:
+            pg.get_by_text("はい", exact=True).click(timeout=2500)
+            pg.wait_for_timeout(4000)
+        except Exception:
+            pass
         hrefs = pg.eval_on_selector_all(
             "a[href]", "els=>els.map(e=>e.getAttribute('href'))")
-        verdict = any(any(h in (x or "").lower()
-                          for h in TARGET_HANDLES) for x in hrefs)
-        print(f"    {url} → 作者判定: "
-              + ("篠原" if verdict else "別作者"))
+        if any(any(h in (x or "").lower()
+                   for h in TARGET_HANDLES) for x in hrefs):
+            verdict = True
+        else:
+            text = (pg.title() + " " + pg.inner_text("body")).lower()
+            verdict = "篠原" in text
+        print(f"    {url} → 作者/内容判定: "
+              + ("篠原" if verdict else "非該当"))
     except Exception:
         pass
     finally:
@@ -94,22 +108,50 @@ def _post_page_is_shinohara(url):
     return verdict
 
 
+def _resolve_dest(url, budget):
+    """HTTPリダイレクトとmeta refreshを辿って最終URLを返す。
+    returns (final_url, body_lower, ok)"""
+    cur = url
+    seen = set()
+    for _ in range(5):
+        if cur in seen:
+            return cur, "", True
+        seen.add(cur)
+        if budget[0] <= 0:
+            return None, None, False
+        budget[0] -= 1
+        try:
+            req = urllib.request.Request(
+                cur, headers={"User-Agent": _RESOLVE_UA})
+            with urllib.request.urlopen(req, timeout=12) as res:
+                final = res.geturl()
+                ct = (res.headers.get("Content-Type") or "").lower()
+                body = res.read(300_000).decode("utf-8", "ignore") \
+                    if "html" in ct else ""
+        except Exception:
+            return None, None, False
+        m = re.search(r'http-equiv=["\']?refresh["\']?[^>]*?url=([^"\'>\s]+)',
+                      body, re.I)
+        if m:
+            cur = urllib.parse.urljoin(final, m.group(1))
+            continue
+        return final, body.lower(), True
+    return cur, "", True
+
+
 def _hits_target(url, budget):
-    """URLが篠原ページへ着地するか。短縮/誘導は遷移先まで解決。
-    投稿ページ(/posts/<uuid>)はページを開いて作者を判定する。
+    """URLが篠原コンテンツへ着地するか。短縮/誘導は遷移先まで解決。
+    投稿ページ(/posts/<uuid>)はページを開いて判定する。
     True / False / None（判定不能）を返す。"""
     if any(t in url.lower() for t in TARGETS):
         return True
     final = url
     host = urllib.parse.urlparse(url).netloc.lower()
-    if budget[0] > 0 and any(h in host for h in REDIRECTS):
-        budget[0] -= 1
-        try:
-            hops, final, html, _ = _resolve_chain(url)
-        except Exception:
+    if any(h in host for h in REDIRECTS):
+        final, body, ok = _resolve_dest(url, budget)
+        if not ok:
             return None
-        chain = " ".join(hops + [final]).lower() + " " + html
-        if any(t in chain for t in TARGETS):
+        if any(t in (final + " " + body).lower() for t in TARGETS):
             return True
     fhost = urllib.parse.urlparse(final).netloc.lower()
     fpath = urllib.parse.urlparse(final).path
@@ -118,17 +160,52 @@ def _hits_target(url, budget):
     return False
 
 
-def _thread_has_target(results, tweet_id):
+def _status_link_is_target(page, tid):
+    """リプ内の別ポストへのリンクを辿り、そのポスト内のリンクを判定。"""
+    _, did, res2 = _fetch_status_thread(
+        page, f"https://x.com/i/status/{tid}")
+    focal = next((t for t in res2 if t.get("rest_id") == tid), None)
+    if not focal:
+        print(f"    リンク先ポスト {tid} 取得不可")
+        return None
+    budget = [6]
+    unknown = False
+    for u in _post_urls(focal.get("legacy") or {}):
+        if XSTATUS_RE.search(u):
+            continue
+        r = _hits_target(u, budget)
+        if r:
+            print(f"    リンク先ポスト {tid} に篠原リンク検出")
+            return True
+        if r is None:
+            unknown = True
+    return None if unknown else False
+
+
+def _thread_has_target(results, tweet_id, page=None):
     """会話内（focal含む）のポストのURLに篠原リンクがあるか。
+    リプ内の別ポストへのリンクも1段だけ辿る。
     True / False / None（未確認のリンクが残った）を返す。"""
     budget = [8]
+    x_follow = [3]
     unknown = False
     conv = _conversation_ids(results, tweet_id)
     for tr in results:
         if tr.get("rest_id") not in conv:
             continue
         for u in _post_urls(tr.get("legacy") or {}):
-            if XSTATUS_RE.search(u):
+            m = XSTATUS_RE.search(u)
+            if m:
+                tid2 = m.group(1)
+                if (tid2 in conv or x_follow[0] <= 0
+                        or page is None):
+                    continue
+                x_follow[0] -= 1
+                r = _status_link_is_target(page, tid2)
+                if r:
+                    return True
+                if r is None:
+                    unknown = True
                 continue
             r = _hits_target(u, budget)
             if r:
@@ -266,7 +343,7 @@ def _save_row(page, tid, existing, shot=True):
     if not focal:
         print(f"  {tid} focalポストがレスポンスに無し")
         return "fail"
-    verdict = _thread_has_target(results, did)
+    verdict = _thread_has_target(results, did, page)
     if verdict is None:
         print(f"  {tid} リンク判定未確認（再試行対象）")
         return "fail"
