@@ -317,6 +317,28 @@ function doGet(e) {
     }
 
     // 本文/URL/素材リンクがキーワードに一致する行を削除: ?action=deletetext&q=ジュキヤ,じゅきや
+    // 篠原バズ: 精査済みstatus idを設定シートL列に追記: ?action=markchecked&ids=a,b,c
+    if (action === "markchecked") {
+      const col = 12;
+      const ids = String((e.parameter || {}).ids || "")
+        .split(",").map(s => s.trim()).filter(Boolean);
+      const lastCfg = cfg.getLastRow();
+      const cur = lastCfg >= 5
+        ? cfg.getRange(5, col, lastCfg - 4, 1).getValues()
+          .flat().map(s => String(s).trim())
+        : [];
+      const seen = new Set(cur.filter(Boolean));
+      const add = ids.filter(i => !seen.has(i));
+      if (add.length) {
+        let lastL = 4;
+        for (let i = cur.length - 1; i >= 0; i--) {
+          if (cur[i]) { lastL = 5 + i; break; }
+        }
+        add.forEach((id, i) => cfg.getRange(lastL + 1 + i, col).setValue(id));
+      }
+      return ok({ marked: add.length });
+    }
+
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "deletetext") {
       const qs = String((e.parameter || {}).q || "").split(",")
@@ -475,8 +497,12 @@ function doGet(e) {
         if (m) growthExistingIds.push(m[1]);
       }
     }
+    const shinoharaCheckedIds = lastCfg >= 5
+      ? cfg.getRange(5, 12, lastCfg - 4, 1).getValues()
+        .flat().map(String).map(s => s.trim()).filter(Boolean)
+      : [];
     return ok({ enabled, threshold, sensitiveOnly, jaOnly, accounts, keywords,
-                existingIds, rejectedIds,
+                existingIds, rejectedIds, shinoharaCheckedIds,
                 growth: { enabled: growthEnabled, threshold: growthThreshold,
                           accounts: growthAccounts,
                           existingIds: growthExistingIds,

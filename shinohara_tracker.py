@@ -318,61 +318,54 @@ def _launch(p):
     return browser, ctx.new_page()
 
 
+def _mark_checked(tid, pending):
+    """精査済みidをバッファし、10件たまったら設定シートへ記録。"""
+    pending.append(tid)
+    if len(pending) >= 10:
+        _flush_checked(pending)
+
+
+def _flush_checked(pending):
+    if pending and not DRY_RUN:
+        try:
+            call_api(params="action=markchecked&ids=" + ",".join(pending))
+        except Exception as e:
+            print(f"  markchecked error: {e}", file=sys.stderr)
+    pending.clear()
+
+
+def _checked_ids():
+    """精査済みstatus id集合（設定シートL列）。"""
+    try:
+        res = call_api(params="action=config")
+        return set(res.get("shinoharaCheckedIds") or [])
+    except Exception as e:
+        print(f"  config取得失敗: {e}", file=sys.stderr)
+        return set()
+
+
 def main():
     if not collector.APPS_SCRIPT_URL or not collector.TOKEN:
         sys.exit("APPS_SCRIPT_URL / APPS_SCRIPT_TOKEN が未設定です")
 
     existing = _existing_ids()
-    print(f"篠原バズ 既存: {len(existing)}件"
-          + ("（バックフィル）" if BACKFILL else "")
+    # BACKFILL=1 は全行を再精査（checkedを無視）。
+    # 通常実行は差分のみ（checkedをスキップ）。
+    checked = set() if BACKFILL else _checked_ids()
+    print(f"篠原バズ 既存: {len(existing)}件 精査済み: {len(checked)}件"
+          + ("（全行再精査）" if BACKFILL else "（差分精査）")
           + ("（DRY_RUN）" if DRY_RUN else ""))
 
     saved = 0
+    pending = []
     with sync_playwright() as p:
         browser, page = _launch(p)
         global _CTX
         _CTX = page.context
-        if BACKFILL:
-            # 既存収集行のリプ欄を精査してマッチ分をコピー
-            rows = []
-            for sheet in ("", "growth"):
-                params = "action=list" + (f"&sheet={sheet}" if sheet else "")
-                rows += (call_api(params=params).get("rows") or [])
-            print(f"精査対象: {len(rows)}行（先頭{START}行スキップ）")
-            rows = rows[START:]
-            consec_fail = 0
-            for i, row in enumerate(rows):
-                m = re.search(r"/status/(\d+)", row.get("url") or "")
-                if not m or m.group(1) in existing:
-                    continue
-                tid = m.group(1)
-                status = "fail"
-                for attempt in range(3):
-                    try:
-                        status = _save_row(page, tid, existing)
-                    except Exception as e:
-                        print(f"  [{i+1}/{len(rows)}] {tid} error: {e}",
-                              file=sys.stderr)
-                        status = "fail"
-                        page.wait_for_timeout(5000 * (attempt + 1))
-                        continue
-                    break
-                if status == "saved":
-                    saved += 1
-                if status == "fail":
-                    consec_fail += 1
-                    if consec_fail >= 30:
-                        print("連続失敗のため中断（再実行してください）")
-                        break
-                else:
-                    consec_fail = 0
-                if saved >= MAX_SAVE:
-                    print(f"保存上限 {MAX_SAVE}件に到達")
-                    break
-                page.wait_for_timeout(2000)
-        else:
+        if not BACKFILL:
+            # 検索で篠原リンク含有ポストを直接拾う（補助経路）
             targets = _collect_targets(page) - existing
-            print(f"保存対象: {len(targets)}件")
+            print(f"検索ヒット保存対象: {len(targets)}件")
             for tid in sorted(targets, key=int):
                 try:
                     if _save_row(page, tid, existing) == "saved":
@@ -380,9 +373,48 @@ def main():
                 except Exception as e:
                     print(f"  {tid} error: {e}", file=sys.stderr)
                 if saved >= MAX_SAVE:
-                    print(f"保存上限 {MAX_SAVE}件に到達")
                     break
                 page.wait_for_timeout(1500)
+
+        # 収集済み行のリプ欄を差分精査（メイン経路）
+        rows = []
+        for sheet in ("", "growth"):
+            params = "action=list" + (f"&sheet={sheet}" if sheet else "")
+            rows += (call_api(params=params).get("rows") or [])
+        rows = rows[START:]
+        print(f"精査対象: {len(rows)}行（checked/既存はスキップ）")
+        consec_fail = 0
+        for i, row in enumerate(rows):
+            m = re.search(r"/status/(\d+)", row.get("url") or "")
+            if not m or m.group(1) in existing or m.group(1) in checked:
+                continue
+            tid = m.group(1)
+            status = "fail"
+            for attempt in range(3):
+                try:
+                    status = _save_row(page, tid, existing)
+                except Exception as e:
+                    print(f"  [{i+1}/{len(rows)}] {tid} error: {e}",
+                          file=sys.stderr)
+                    status = "fail"
+                    page.wait_for_timeout(5000 * (attempt + 1))
+                    continue
+                break
+            if status == "saved":
+                saved += 1
+            if status == "fail":
+                consec_fail += 1
+                if consec_fail >= 30:
+                    print("連続失敗のため中断（再実行してください）")
+                    break
+            else:
+                consec_fail = 0
+                _mark_checked(tid, pending)
+            if saved >= MAX_SAVE:
+                print(f"保存上限 {MAX_SAVE}件に到達")
+                break
+            page.wait_for_timeout(2000)
+        _flush_checked(pending)
         browser.close()
 
     print(f"完了: {saved}件を「篠原バズ」タブに保存"
