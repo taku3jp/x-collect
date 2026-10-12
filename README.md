@@ -133,3 +133,15 @@ Slack通知には GitHub Secret `SLACK_WEBHOOK_URL` が必要
   超過分は次回以降に回収される（収集済みIDで重複判定するため取りこぼしなし）
 - **ローカルで手動実行**: `APPS_SCRIPT_URL` `APPS_SCRIPT_TOKEN` を環境変数に
   設定して `python collector.py`
+
+## FanScope向けメタデータ出力
+
+`gas/Code.js` と `gas/FanScopeExport.js` を既存のApps Scriptへ反映し、既存Webアプリの新バージョンとしてデプロイする。GitHubへの反映だけではデプロイは更新されない。既存のTOKENとURLを使用し、X APIトークンは不要。
+
+- `GET ?action=fanscope_export_capability`: 認証・シートへのアクセスなしで対応バージョンを返す。取り込み側はこの応答のversion/source/capabilityが一致してからPOSTする。旧デプロイにはPOSTしない。
+- `POST {"action":"fanscope_export","token":"<既存TOKEN>"}`: 「X収集」のURL・収集日時・反応数だけを返す。本文・画像・動画・Drive URLは含まない。
+- 読み取り専用。認証後最大3000行を一括取得し、超過・不正な数値は明示的に失敗する。上流で未取得と区別できない0はnull。収集日時はJSTで、投稿公開日時とは異なる。
+- 出力形式: `{version:1, source:"taku3jp/x-collect", rows:[{url,date,impressions,likes,reposts,bookmarks}]}`。
+- TOKENをログ・PR・チャットへ貼らない。シートが通常持つのは投稿ごとの単発記録であり、増加や他SNSとの因果をこの出力だけで示すものではない。
+
+検証: `node --test tests/fanscope-export.test.mjs`。GAS実デプロイと実データ取得は別途必要。

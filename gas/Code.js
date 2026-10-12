@@ -132,6 +132,7 @@ function checkToken(e) {
 }
 
 function doGet(e) {
+  if (e && e.parameter && e.parameter.action === "fanscope_export_capability") return fanscopeExportCapability_();
   try {
     const props = PropertiesService.getScriptProperties();
     const action = (e && e.parameter && e.parameter.action) || "";
@@ -513,6 +514,11 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  // Export must precede the existing write/initialization path.
+  var fanscopeRequest;
+  try { fanscopeRequest = JSON.parse((e && e.postData && e.postData.contents) || "{}"); }
+  catch (_) { fanscopeRequest = null; }
+  if (fanscopeRequest && fanscopeRequest.action === "fanscope_export") return fanscopeExport_(e);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
