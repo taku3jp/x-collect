@@ -27,6 +27,10 @@ on:
         description: "バックフィル: スキップする先頭行数（前回途中まで進んだ分）"
         required: false
         default: "0"
+      max_rows:
+        description: "1回の実行で精査する最大行数（レート制限対策の分割）"
+        required: false
+        default: "100"
 
 jobs:
   shinohara:
@@ -74,6 +78,7 @@ jobs:
           SHINOHARA_BACKFILL: ${{ inputs.backfill == 'true' && '1' || '0' }}
           SHINOHARA_MAX_SAVE: ${{ inputs.max_save || '30' }}
           SHINOHARA_START: ${{ inputs.start || '0' }}
+          SHINOHARA_MAX_ROWS: ${{ inputs.max_rows || '100' }}
           SHINOHARA_SEARCH_SCROLLS: ${{ inputs.search_scrolls || '15' }}
           HEADFUL: "1"
         run: xvfb-run -a python shinohara_tracker.py

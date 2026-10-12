@@ -54,6 +54,9 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 BACKFILL = os.environ.get("SHINOHARA_BACKFILL") == "1"
 MAX_SAVE = int(os.environ.get("SHINOHARA_MAX_SAVE", "30"))
 START = int(os.environ.get("SHINOHARA_START", "0"))
+# 1回の実行で精査する行数上限（0=無制限）。
+# Xの詳細取得はレート制限が厳しいため、定期実行では分割して進める。
+MAX_ROWS = int(os.environ.get("SHINOHARA_MAX_ROWS", "0"))
 SEARCH_SCROLLS = int(os.environ.get("SHINOHARA_SEARCH_SCROLLS", "15"))
 NAV_TIMEOUT = 60_000
 XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
@@ -461,6 +464,7 @@ def main():
         rows = rows[START:]
         print(f"精査対象: {len(rows)}行（checked/既存はスキップ）")
         consec_fail = 0
+        processed = 0
         for i, row in enumerate(rows):
             m = re.search(r"/status/(\d+)", row.get("url") or "")
             if not m or m.group(1) in existing or m.group(1) in checked:
@@ -487,8 +491,12 @@ def main():
             else:
                 consec_fail = 0
                 _mark_checked(tid, pending)
+            processed += 1
             if saved >= MAX_SAVE:
                 print(f"保存上限 {MAX_SAVE}件に到達")
+                break
+            if MAX_ROWS and processed >= MAX_ROWS:
+                print(f"精査上限 {MAX_ROWS}行に到達（残りは次回）")
                 break
             page.wait_for_timeout(2000)
         _flush_checked(pending)
