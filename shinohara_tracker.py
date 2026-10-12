@@ -464,6 +464,7 @@ def main():
         rows = rows[START:]
         print(f"精査対象: {len(rows)}行（checked/既存はスキップ）")
         consec_fail = 0
+        waits_done = 0
         processed = 0
         for i, row in enumerate(rows):
             m = re.search(r"/status/(\d+)", row.get("url") or "")
@@ -485,9 +486,17 @@ def main():
                 saved += 1
             if status == "fail":
                 consec_fail += 1
-                if consec_fail >= 30:
-                    print("連続失敗のため中断（再実行してください）")
-                    break
+                if consec_fail >= 10:
+                    # レート制限と判断して同じ実行内で待機→再開
+                    # （中断して次回に回すと毎回最初から制限を叩く）
+                    if waits_done >= 4:
+                        print("連続失敗＋待機リトライ上限。残りは次回")
+                        break
+                    waits_done += 1
+                    print(f"連続失敗{consec_fail}件 → "
+                          f"15分待機して再開 ({waits_done}/4)")
+                    page.wait_for_timeout(15 * 60 * 1000)
+                    consec_fail = 0
             else:
                 consec_fail = 0
                 _mark_checked(tid, pending)
@@ -498,7 +507,7 @@ def main():
             if MAX_ROWS and processed >= MAX_ROWS:
                 print(f"精査上限 {MAX_ROWS}行に到達（残りは次回）")
                 break
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(4000)
         _flush_checked(pending)
         browser.close()
 
