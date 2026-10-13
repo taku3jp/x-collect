@@ -46,9 +46,13 @@ _CREATOR_CACHE = {}
 _RENDER_BUDGET = [500]
 _RENDER_EXHAUSTED = [False]
 SEARCH_QUERIES = (
+    # リプで使われる短縮ドメインそのものを検索（拡張URLインデックス）
+    'url:"mfco.link"',
+    'url:"b-short.link"',
+    'url:"xfns.io"',
+    'url:"mfns.jp"',
+    # 篠原ページ直書き
     'url:"shinohara_kaede" OR url:"shinohara_personal"',
-    '"xfans.tokyo/shinohara_kaede" OR "myfans.jp/shinohara_personal"',
-    '"shinohara_kaede" OR "shinohara_personal"',
 )
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 BACKFILL = os.environ.get("SHINOHARA_BACKFILL") == "1"
