@@ -31,6 +31,10 @@ on:
         description: "1回の実行で精査する最大行数（レート制限対策の分割）"
         required: false
         default: "100"
+      ids:
+        description: "直接保存するstatus id（カンマ区切り。ローカル精査済みヒット用）"
+        required: false
+        default: ""
 
 jobs:
   shinohara:
@@ -79,6 +83,7 @@ jobs:
           SHINOHARA_MAX_SAVE: ${{ inputs.max_save || '30' }}
           SHINOHARA_START: ${{ inputs.start || '0' }}
           SHINOHARA_MAX_ROWS: ${{ inputs.max_rows || '100' }}
+          SHINOHARA_IDS: ${{ inputs.ids || '' }}
           SHINOHARA_SEARCH_SCROLLS: ${{ inputs.search_scrolls || '15' }}
           HEADFUL: "1"
         run: xvfb-run -a python shinohara_tracker.py

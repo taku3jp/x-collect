@@ -57,6 +57,10 @@ START = int(os.environ.get("SHINOHARA_START", "0"))
 # 1回の実行で精査する行数上限（0=無制限）。
 # Xの詳細取得はレート制限が厳しいため、定期実行では分割して進める。
 MAX_ROWS = int(os.environ.get("SHINOHARA_MAX_ROWS", "0"))
+# 直接保存するstatus id（カンマ区切り）。ローカル精査済みのヒットを
+# クォータを消費せず保存だけ行う用途。
+IDS = [s.strip() for s in os.environ.get("SHINOHARA_IDS", "").split(",")
+       if s.strip()]
 SEARCH_SCROLLS = int(os.environ.get("SHINOHARA_SEARCH_SCROLLS", "15"))
 NAV_TIMEOUT = 60_000
 XSTATUS_RE = re.compile(r"(?:x\.com|twitter\.com)/[^/]+/status/(\d+)")
@@ -442,6 +446,18 @@ def main():
         browser, page = _launch(p)
         global _CTX
         _CTX = page.context
+        if IDS:
+            # 指定idを直接保存（判定も内部で再確認される）
+            for tid in IDS:
+                try:
+                    if _save_row(page, tid, existing) == "saved":
+                        saved += 1
+                except Exception as e:
+                    print(f"  {tid} error: {e}", file=sys.stderr)
+                page.wait_for_timeout(1500)
+            browser.close()
+            print(f"完了: {saved}件を「篠原バズ」タブに保存")
+            return
         if not BACKFILL:
             # 検索で篠原リンク含有ポストを直接拾う（補助経路）
             targets = _collect_targets(page) - existing
