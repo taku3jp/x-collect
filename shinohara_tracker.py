@@ -55,6 +55,7 @@ SEARCH_QUERIES = (
     'url:"shinohara_kaede" OR url:"shinohara_personal"',
 )
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
+MIN_IMP = int(os.environ.get("SHINOHARA_MIN_IMP", "100000"))
 BACKFILL = os.environ.get("SHINOHARA_BACKFILL") == "1"
 MAX_SAVE = int(os.environ.get("SHINOHARA_MAX_SAVE", "30"))
 START = int(os.environ.get("SHINOHARA_START", "0"))
@@ -362,6 +363,9 @@ def _save_row(page, tid, existing, shot=True):
         print(f"  {tid} リプ欄に篠原リンク確認できず → スキップ")
         return "skip"
     t = parse_tweet(focal)
+    if t["impressions"] < MIN_IMP:
+        print(f"  {tid} インプ{t['impressions']:,} < {MIN_IMP:,} → スキップ")
+        return "skip"
     if DRY_RUN:
         print(f"  [DRY_RUN] {t['url']} imp={t['impressions']:,}"
               f" text={t['text'][:40]!r}")
