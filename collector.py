@@ -51,9 +51,13 @@ BLOCKED_DOMAINS = ("fanza", "dmm.co.jp", "dmm.com", "mgstage", "sokmil",
 FANCLUB_DOMAINS = ("myfans", "fantia", "onlyfans", "fansly", "fanvue",
                    "candfans", "fc2", "stripchat", "chaturbate", "xfans")
 
-# 除外する誘導先（パス込み指定）。URL・リダイレクトチェイン・リンク集HTMLに
-# 含まれたらその投稿は収集しない。growth_trackerでは無効化して使う
-BLOCKED_TARGETS = ("myfans.jp/jukiya_erotame",)
+# 除外する誘導先（パス込み指定）。URL・リダイレクトチェイン・リンク集HTML・
+# ファンクラブ着地ページHTMLに含まれたらその投稿は収集しない。
+# growth_trackerでは無効化して使う
+# ジュキヤ系（YouTuberネタ動画にアフィ返信を寄生させるパターン）:
+# posts/<uuid>形式はURLに作者名が出ないのでページHTMLのog:title等で判定する
+BLOCKED_TARGETS = ("myfans.jp/jukiya_erotame", "jukiya", "ジュキヤ",
+                   "じゅきや", "さもあり", "今日はこれでいいや")
 BLOCK_TARGETS_ENABLED = True
 
 # 遷移先を確認する短縮・誘導・リンク集ドメイン（URL自体は着地とみなさない）
@@ -292,7 +296,8 @@ def _resolve_chain(url, max_hops=4):
                 responded = True
                 ct = (res.headers.get("Content-Type") or "").lower()
                 host = urllib.parse.urlparse(cur).netloc.lower()
-                if "text/html" in ct and any(a in host for a in AGGREGATOR_HOSTS):
+                if "text/html" in ct and any(
+                        a in host for a in AGGREGATOR_HOSTS + FANCLUB_DOMAINS):
                     html = res.read(200_000).decode("utf-8", "ignore").lower()
                 break
         except urllib.error.HTTPError as e:
@@ -319,6 +324,16 @@ def _aff_url_level(url, keywords, resolve=True):
     if BLOCK_TARGETS_ENABLED and any(t in lu for t in BLOCKED_TARGETS):
         return -1
     if any(d in lu for d in FANCLUB_DOMAINS):
+        # posts/<uuid>形式はURLに作者名が出ないので着地HTMLを確認
+        # （キャッシュ済みならfetchは発生しない）
+        hops, final, html, ok = _resolve_chain(url)
+        if ok:
+            hay = " ".join(hops + [final]).lower() + " " + html
+            if any(d in hay for d in BLOCKED_DOMAINS):
+                return -1
+            if BLOCK_TARGETS_ENABLED and \
+                    any(t in hay for t in BLOCKED_TARGETS):
+                return -1
         return 2
     host = urllib.parse.urlparse(url).netloc.lower()
     if any(h in host for h in REDIRECT_HOSTS):
