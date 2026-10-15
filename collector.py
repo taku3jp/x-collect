@@ -959,15 +959,16 @@ def main():
 
             # メディアの中身がエロ系か確認
             # （バズネタ動画にアフィ返信を寄生させるだけの非エロ投稿を弾く。
-            #   ポスト単体で肌色率が低くても、作者が一貫してエロ系を
-            #   投稿している垢なら救済する。実測:
-            #   エロ垢のメディア平均 0.31〜0.48 / 寄生垢 0.11〜0.13）
+            #   動画肌色率が0.45未満なら作者履歴avg≥0.30を必須にする。
+            #   寄生垢は顔が主なバラエティ動画を貼るので肌色率は高いが
+            #   作者avgは低い。実測:
+            #   アダアフィ垢の作者avg 0.31〜0.48 / 寄生垢 0.11〜0.29）
             mp4s = [u for u in t["media"].split("\n") if ".mp4" in u]
             if mp4s:
                 skin = _video_skin_ratio(mp4s[0])
-                if 0 <= skin < 0.30:
+                if skin < 0.45:
                     auth = _author_media_skin(page, t["user"])
-                    if auth < 0.20:
+                    if auth < 0.30:
                         print(f"  skip (非エロ動画 skin={skin:.2f}"
                               f" 作者avg={auth:.2f}): {t['url']}")
                         rejected.append(t["id"])
@@ -975,9 +976,9 @@ def main():
             elif t.get("photo_urls") and not t.get("has_video"):
                 pskins = [_photo_skin_ratio(u) for u in t["photo_urls"][:4]]
                 skin = max((s for s in pskins if s >= 0), default=-1.0)
-                if 0 <= skin < 0.18:
+                if skin < 0.35:
                     auth = _author_media_skin(page, t["user"])
-                    if auth < 0.20:
+                    if auth < 0.30:
                         print(f"  skip (非エロ画像 skin={skin:.2f}"
                               f" 作者avg={auth:.2f}): {t['url']}")
                         rejected.append(t["id"])

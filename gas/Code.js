@@ -361,6 +361,30 @@ function doGet(e) {
       return ok({ deleted: nos.length, nos });
     }
 
+    // 本文/URL/素材リンクがキーワードに一致する行を返す（削除しない）:
+    // ?action=find&q=キーワード1,キーワード2
+    // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
+    if (action === "find") {
+      const qs = String((e.parameter || {}).q || "").split(",")
+        .map(s => s.trim().toLowerCase()).filter(Boolean);
+      const sheet = ss.getSheetByName(
+        (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
+      const rows = [];
+      if (qs.length) {
+        for (let r = 2; r <= sheet.getLastRow(); r++) {
+          const url = String(sheet.getRange(r, 3).getValue());
+          const text = String(sheet.getRange(r, 4).getValue());
+          const media = String(sheet.getRange(r, 5).getValue());
+          const hay = (url + " " + text + " " + media).toLowerCase();
+          if (qs.some(q => hay.includes(q))) {
+            rows.push({ no: sheet.getRange(r, 1).getValue(),
+                        url, text, media });
+          }
+        }
+      }
+      return ok({ rows });
+    }
+
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {
