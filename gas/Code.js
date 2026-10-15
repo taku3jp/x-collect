@@ -385,6 +385,18 @@ function doGet(e) {
       return ok({ rows });
     }
 
+    // 全行のstatus idとURLだけ返す（軽量監査用）: ?action=listids
+    if (action === "listids") {
+      const sheet = ss.getSheetByName(DATA_SHEET);
+      const ids = [];
+      for (let r = 2; r <= sheet.getLastRow(); r++) {
+        const url = String(sheet.getRange(r, 3).getValue());
+        const m = url.match(/status\/(\d+)/);
+        if (m) ids.push(m[1]);
+      }
+      return ok({ ids });
+    }
+
     // 全行のNo+URL+本文+素材リンクを返す（監査用）: ?action=list
     // &sheet=growth で「実際伸びた投稿」タブ側を対象にする
     if (action === "list") {
