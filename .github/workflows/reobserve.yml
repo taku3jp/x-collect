@@ -1,0 +1,108 @@
+name: reobserve-fixed-posts
+
+# Manual-only candidate workflow: re-observes a fixed manifest of public
+# post URLs and uploads a metadata-only JSON artifact. No schedule, no
+# pushes, no WARP/proxy additions, no sheet writes.
+# Early gate: read approval and manifest validation run right after
+# checkout/setup, before dependency install and before the X session
+# secret is restored. A failing gate starts nothing further.
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_json:
+        description: "再観測manifest JSON (version 1, 最大100件/最大72時間)"
+        required: true
+        default: ""
+      read_approved:
+        description: "公開投稿の閲覧(read)承認。true 以外は拒否"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reobserve
+  cancel-in-progress: false
+
+jobs:
+  reobserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Gate - read approval + manifest validation (env -> python)
+        env:
+          MANIFEST_JSON: ${{ inputs.manifest_json }}
+          READ_APPROVED: ${{ inputs.read_approved }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, pathlib, sys
+          from datetime import datetime, timezone
+          from fixed_reobserve import (ManifestError, check_window,
+                                       load_manifest)
+          if os.environ.get("READ_APPROVED") != "true":
+              print("refused: read_approved is not true",
+                    file=sys.stderr)
+              sys.exit(1)
+          raw = os.environ.get("MANIFEST_JSON", "")
+          try:
+              manifest = load_manifest(raw)
+          except ManifestError as e:
+              print("manifest_invalid: " + e.code, file=sys.stderr)
+              sys.exit(1)
+          gate = check_window(manifest, datetime.now(timezone.utc))
+          if gate:
+              print("manifest_invalid: " + gate, file=sys.stderr)
+              sys.exit(1)
+          pathlib.Path("reobserve_manifest.json").write_text(
+              raw, encoding="utf-8")
+          print("manifest ok: %d posts" % len(manifest["posts"]))
+          PYEOF
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Restore X session (0600, never printed)
+        env:
+          X_STATE_JSON: ${{ secrets.X_STATE_JSON }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          fd = os.open("state.json",
+                       os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(fd, "w", encoding="utf-8") as f:
+              f.write(os.environ["X_STATE_JSON"])
+          PYEOF
+
+      - name: Run fixed re-observation
+        env:
+          X_STATE_PATH: state.json
+          HEADFUL: "1"
+        run: |
+          xvfb-run -a python fixed_reobserve.py \
+            --manifest reobserve_manifest.json \
+            --output observations.json --read-approved
+
+      - name: Upload observation metadata (JSON only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-fixed-observations
+          path: observations.json
+          if-no-files-found: ignore
+          retention-days: 7
