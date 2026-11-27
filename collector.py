@@ -11,6 +11,7 @@
 """
 
 import base64
+import http.client
 import http.cookiejar
 import json
 import os
@@ -121,8 +122,12 @@ def call_api(payload=None, params=""):
                         continue
                     raise
             raise RuntimeError("Apps Script redirect limit exceeded")
-        except (urllib.error.HTTPError, urllib.error.URLError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException) as e:
             if attempt < 3:
+                print(f"Apps Script接続失敗（{type(e).__name__}）。"
+                      f"{15 * (attempt + 1)}秒後に再試行 "
+                      f"({attempt + 1}/3)", file=sys.stderr)
                 time.sleep(15 * (attempt + 1))
                 continue
             raise

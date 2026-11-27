@@ -440,7 +440,11 @@ def main():
     if not collector.APPS_SCRIPT_URL or not collector.TOKEN:
         sys.exit("APPS_SCRIPT_URL / APPS_SCRIPT_TOKEN が未設定です")
 
-    existing = _existing_ids()
+    try:
+        existing = _existing_ids()
+    except Exception as e:
+        print(f"既存ID取得失敗（重複は保存時に除外）: {e}", file=sys.stderr)
+        existing = set()
     # BACKFILL=1 は全行を再精査（checkedを無視）。
     # 通常実行は差分のみ（checkedをスキップ）。
     checked = set() if BACKFILL else _checked_ids()
@@ -484,7 +488,14 @@ def main():
         rows = []
         for sheet in ("", "growth"):
             params = "action=list" + (f"&sheet={sheet}" if sheet else "")
-            rows += (call_api(params=params).get("rows") or [])
+            try:
+                rows += (call_api(params=params).get("rows") or [])
+            except Exception as e:
+                name = sheet or "default"
+                print(f"{name}シート一覧取得失敗。今回は残りの精査をスキップ: {e}",
+                      file=sys.stderr)
+                rows = []
+                break
         rows = rows[START:]
         print(f"精査対象: {len(rows)}行（checked/既存はスキップ）")
         consec_fail = 0
