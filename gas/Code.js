@@ -389,10 +389,13 @@ function doGet(e) {
     if (action === "listids") {
       const sheet = ss.getSheetByName(DATA_SHEET);
       const ids = [];
-      for (let r = 2; r <= sheet.getLastRow(); r++) {
-        const url = String(sheet.getRange(r, 3).getValue());
-        const m = url.match(/status\/(\d+)/);
-        if (m) ids.push(m[1]);
+      const last = sheet.getLastRow();
+      if (last >= 2) {
+        const urls = sheet.getRange(2, 3, last - 1, 1).getValues().flat();
+        for (const u of urls) {
+          const m = String(u).match(/status\/(\d+)/);
+          if (m) ids.push(m[1]);
+        }
       }
       return ok({ ids });
     }
@@ -403,11 +406,15 @@ function doGet(e) {
       const sheet = ss.getSheetByName(
         sheetNameFor_((e.parameter || {}).sheet));
       const rows = [];
-      for (let r = 2; r <= sheet.getLastRow(); r++) {
-        rows.push({ no: sheet.getRange(r, 1).getValue(),
-                    url: String(sheet.getRange(r, 3).getValue()),
-                    text: String(sheet.getRange(r, 4).getValue()),
-                    media: String(sheet.getRange(r, 5).getValue()) });
+      const last = sheet.getLastRow();
+      if (last >= 2) {
+        const values = sheet.getRange(2, 1, last - 1, 5).getValues();
+        for (const row of values) {
+          rows.push({ no: row[0],
+                      url: String(row[2]),
+                      text: String(row[3]),
+                      media: String(row[4]) });
+        }
       }
       return ok({ rows });
     }

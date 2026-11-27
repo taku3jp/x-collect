@@ -291,11 +291,15 @@ function doGet(e) {
       const sheet = ss.getSheetByName(
         (e.parameter || {}).sheet === "growth" ? GROWTH_SHEET : DATA_SHEET);
       const rows = [];
-      for (let r = 2; r <= sheet.getLastRow(); r++) {
-        rows.push({ no: sheet.getRange(r, 1).getValue(),
-                    url: String(sheet.getRange(r, 3).getValue()),
-                    text: String(sheet.getRange(r, 4).getValue()),
-                    media: String(sheet.getRange(r, 5).getValue()) });
+      const last = sheet.getLastRow();
+      if (last >= 2) {
+        const values = sheet.getRange(2, 1, last - 1, 5).getValues();
+        for (const row of values) {
+          rows.push({ no: row[0],
+                      url: String(row[2]),
+                      text: String(row[3]),
+                      media: String(row[4]) });
+        }
       }
       return ok({ rows });
     }
